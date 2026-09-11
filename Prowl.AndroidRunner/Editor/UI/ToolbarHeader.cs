@@ -86,7 +86,14 @@ namespace Prowl.AndroidRunner.Editor.UI
             btn.Click += (s, e) =>
             {
                 var popup = new PopupMenu(_activity, btn);
-                for (int i = 0; i < items.Length; i++) popup.Menu.Add(0, i, i, items[i]);
+                var menu = popup.Menu;
+                if (menu != null)
+                {
+                    for (int i = 0; i < items.Length; i++)
+                    {
+                        menu.Add(0, i, i, items[i]);
+                    }
+                }
                 popup.MenuItemClick += (send, args) => OnMenuActionSelected?.Invoke(args.Item?.TitleFormatted?.ToString() ?? "");
                 popup.Show();
             };
