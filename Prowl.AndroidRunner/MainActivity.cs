@@ -1,9 +1,9 @@
 using Android.App;
 using Android.Content.PM;
 using Android.OS;
-using Android.Views;
 using Silk.NET.Maths;
 using Silk.NET.Windowing;
+using SilkWindow = Silk.NET.Windowing.Window;
 
 namespace Prowl.AndroidRunner
 {
@@ -22,16 +22,17 @@ namespace Prowl.AndroidRunner
         {
             base.OnCreate(savedInstanceState);
 
-            // I-extract ang game assets sa internal storage
+            // Extract game assets to internal storage
             AssetExtractor.EnsureAssetsExtracted(this);
 
-            // Gumawa ng Silk View para sa Android OpenGL ES
+            // Configure Silk View for Android OpenGL ES
             var options = ViewOptions.Default;
             options.API = new GraphicsAPI(ContextAPI.OpenGLES, ContextProfile.Core, ContextFlags.Default, new APIVersion(3, 0));
             options.FramesPerSecond = 60;
             options.UpdatesPerSecond = 60;
 
-            _view = Window.GetView(options);
+            // Use SilkWindow instead of Window to avoid collision with Android.App.Activity.Window
+            _view = SilkWindow.GetView(options);
 
             _view.Load += OnLoad;
             _view.Render += OnRender;
@@ -42,7 +43,7 @@ namespace Prowl.AndroidRunner
 
         private void OnLoad()
         {
-            // Initialization logic para sa Prowl Engine
+            // Initialization logic for Prowl Engine
         }
 
         private void OnUpdate(double delta)
