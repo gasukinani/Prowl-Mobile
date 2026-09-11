@@ -44,10 +44,15 @@ jobs:
         -p:AndroidEnableProfiledAot=false
         -p:AndroidKeyStore=false
 
-    - name: Upload APK Artifact
+    # Awtomatikong tanggalin ang unsigned at intermediate APKs bago mag-upload
+    - name: Filter Out Unsigned APKs
+      run: |
+        echo "Filtering APK files..."
+        find Prowl.AndroidRunner/bin/Release/net10.0-android -type f -name "*.apk" ! -name "*-Signed.apk" -delete || true
+
+    - name: Upload Signed APK Artifact
       uses: actions/upload-artifact@v4
       with:
         name: Prowl-Android-APK
-        # Tanging ang final output APK lang sa publish folder ang ia-upload
-        path: Prowl.AndroidRunner/bin/Release/net10.0-android/publish/*.apk
+        path: Prowl.AndroidRunner/bin/Release/net10.0-android/**/*-Signed.apk
         if-no-files-found: error
