@@ -11,7 +11,8 @@ namespace Prowl.AndroidRunner.Editor.Rendering
         private readonly GL _gl;
         private uint _standard3DProgram;
         private uint _skyProgram;
-        private uint _vaoSky, _vaoFloor, _vaoCube, _vaoTree, _vaoGizmo;
+        private uint _billboardProgram;
+        private uint _vaoSky, _vaoFloor, _vaoCube, _vaoTree, _vaoGizmo, _vaoBoxOutline, _vaoLightGizmo;
         private int _floorVertCount, _treeVertCount, _gizmoVertCount;
 
         public EditorSceneRenderer(GL gl)
@@ -23,6 +24,7 @@ namespace Prowl.AndroidRunner.Editor.Rendering
 
         private void InitShaders()
         {
+            // 1. Sky Shader
             string skyVS = @"#version 300 es
             layout(location = 0) in vec2 aPos;
             out vec2 vUV;
@@ -36,15 +38,16 @@ namespace Prowl.AndroidRunner.Editor.Rendering
             in vec2 vUV;
             out vec4 FragColor;
             void main() {
-                vec3 skyTop = vec3(0.08, 0.10, 0.14);
-                vec3 skyMid = vec3(0.18, 0.22, 0.28);
-                vec3 horizonGlow = vec3(0.52, 0.38, 0.22);
-                vec3 col = mix(horizonGlow, skyMid, smoothstep(0.12, 0.50, vUV.y));
-                col = mix(col, skyTop, smoothstep(0.50, 0.95, vUV.y));
+                vec3 skyTop = vec3(0.08, 0.10, 0.15);
+                vec3 skyMid = vec3(0.18, 0.22, 0.29);
+                vec3 horizonGlow = vec3(0.58, 0.42, 0.24);
+                vec3 col = mix(horizonGlow, skyMid, smoothstep(0.10, 0.45, vUV.y));
+                col = mix(col, skyTop, smoothstep(0.45, 0.95, vUV.y));
                 FragColor = vec4(col, 1.0);
             }";
             _skyProgram = CompileProgram(skyVS, skyFS);
 
+            // 2. 3D World Lit Shader
             string litVS = @"#version 300 es
             layout(location = 0) in vec3 aPos;
             layout(location = 1) in vec3 aNorm;
@@ -67,11 +70,31 @@ namespace Prowl.AndroidRunner.Editor.Rendering
                 vec3 N = normalize(vNorm);
                 vec3 L = normalize(vec3(0.6, 1.4, 0.7));
                 float diff = max(dot(N, L), 0.0);
-                vec3 ambient = vec3(0.35, 0.38, 0.44);
+                vec3 ambient = vec3(0.38, 0.40, 0.46);
                 vec3 sunCol = vec3(1.0, 0.96, 0.88);
                 FragColor = vec4((ambient + diff * sunCol) * vCol, 1.0);
             }";
             _standard3DProgram = CompileProgram(litVS, litFS);
+
+            // 3. Gizmo Billboard Shader
+            string billVS = @"#version 300 es
+            layout(location = 0) in vec3 aPos;
+            layout(location = 1) in vec3 aCol;
+            uniform mat4 uModel, uView, uProj;
+            out vec3 vCol;
+            void main() {
+                vCol = aCol;
+                gl_Position = uProj * uView * uModel * vec4(aPos, 1.0);
+            }";
+
+            string billFS = @"#version 300 es
+            precision mediump float;
+            in vec3 vCol;
+            out vec4 FragColor;
+            void main() {
+                FragColor = vec4(vCol, 1.0);
+            }";
+            _billboardProgram = CompileProgram(billVS, billFS);
         }
 
         private unsafe void BuildMeshes()
@@ -86,9 +109,9 @@ namespace Prowl.AndroidRunner.Editor.Rendering
             _gl.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, 2 * sizeof(float), (void*)0);
             _gl.EnableVertexAttribArray(0);
 
-            // Floor Grid with Red/Yellow Markers (Screenshot 1 match)
+            // Floor Grid with Red/Yellow Markers (matching Screenshot 2)
             var floorList = new List<float>();
-            int gridSize = 20; float step = 1.0f, start = -gridSize * step * 0.5f;
+            int gridSize = 24; float step = 1.0f, start = -gridSize * step * 0.5f;
             for (int x = 0; x < gridSize; x++)
             {
                 for (int z = 0; z < gridSize; z++)
@@ -103,8 +126,8 @@ namespace Prowl.AndroidRunner.Editor.Rendering
                     {
                         Vector3 markerCol = (x % 2 == 0) ? new Vector3(0.95f, 0.25f, 0.25f) : new Vector3(0.95f, 0.85f, 0.20f);
                         float cx = (x0 + x1) * 0.5f, cz = (z0 + z1) * 0.5f;
-                        AddTile(floorList, cx - 0.09f, cz - 0.02f, cx + 0.09f, cz + 0.02f, markerCol, 0.002f);
-                        AddTile(floorList, cx - 0.02f, cz - 0.09f, cx + 0.02f, cz + 0.09f, markerCol, 0.002f);
+                        AddTile(floorList, cx - 0.08f, cz - 0.018f, cx + 0.08f, cz + 0.018f, markerCol, 0.002f);
+                        AddTile(floorList, cx - 0.018f, cz - 0.08f, cx + 0.018f, cz + 0.08f, markerCol, 0.002f);
                     }
                 }
             }
@@ -124,14 +147,36 @@ namespace Prowl.AndroidRunner.Editor.Rendering
             _treeVertCount = treeList.Count / 9;
             _vaoTree = CreateVAO(treeList.ToArray());
 
-            // Gizmo Mesh
+            // XYZ Translation Gizmo
             var gizmoList = new List<float> {
-                0,0.5f,0, 0,1,0, 0.95f,0.25f,0.25f,  1.4f,0.5f,0, 0,1,0, 0.95f,0.25f,0.25f,
-                0,0.5f,0, 0,1,0, 0.25f,0.95f,0.25f,  0,1.9f,0, 0,1,0, 0.25f,0.95f,0.25f,
-                0,0.5f,0, 0,1,0, 0.25f,0.55f,0.95f,  0,0.5f,1.4f, 0,1,0, 0.25f,0.55f,0.95f
+                0,0,0, 0,1,0, 0.95f,0.25f,0.25f,  1.2f,0,0, 0,1,0, 0.95f,0.25f,0.25f,
+                0,0,0, 0,1,0, 0.25f,0.95f,0.25f,  0,1.2f,0, 0,1,0, 0.25f,0.95f,0.25f,
+                0,0,0, 0,1,0, 0.25f,0.55f,0.95f,  0,0,1.2f, 0,1,0, 0.25f,0.55f,0.95f
             };
             _gizmoVertCount = gizmoList.Count / 9;
             _vaoGizmo = CreateVAO(gizmoList.ToArray());
+
+            // Box Wireframe Selection Outline
+            var boxLines = new List<float>();
+            AddBoxLines(boxLines, Vector3.Zero, new Vector3(1.02f, 1.02f, 1.02f), new Vector3(0.22f, 0.52f, 0.98f));
+            _vaoBoxOutline = CreateVAO(boxLines.ToArray());
+
+            // Light Bulb Ring Gizmo
+            var lightLines = new List<float>();
+            int segments = 24; float r = 0.35f;
+            for (int i = 0; i < segments; i++)
+            {
+                float a0 = (i / (float)segments) * MathF.PI * 2f;
+                float a1 = ((i + 1) / (float)segments) * MathF.PI * 2f;
+                lightLines.AddRange(new[] {
+                    MathF.Cos(a0)*r, MathF.Sin(a0)*r, 0, 0,1,0, 0.95f,0.85f,0.20f,
+                    MathF.Cos(a1)*r, MathF.Sin(a1)*r, 0, 0,1,0, 0.95f,0.85f,0.20f
+                });
+            }
+            lightLines.AddRange(new[] {
+                0f, -0.35f, 0f, 0,1,0, 0.95f,0.85f,0.20f, 0f, -0.6f, 0f, 0,1,0, 0.95f,0.85f,0.20f
+            });
+            _vaoLightGizmo = CreateVAO(lightLines.ToArray());
         }
 
         public unsafe void Render(int width, int height, float fov, float camDistance, float camYaw, float camPitch, Vector3 camTarget, Scene scene, ProwlNode? selectedNode, bool isEditMode)
@@ -152,8 +197,9 @@ namespace Prowl.AndroidRunner.Editor.Rendering
             _gl.UseProgram(_standard3DProgram);
 
             float aspect = (float)width / Math.Max(1, height);
-            var proj = Matrix4x4.CreatePerspectiveFieldOfView(fov * (MathF.PI / 180f), aspect, 0.1f, 200f);
+            var proj = Matrix4x4.CreatePerspectiveFieldOfView(fov * (MathF.PI / 180f), aspect, 0.05f, 300f);
 
+            // Natural Orbit Camera Position
             float radY = camYaw * MathF.PI / 180f;
             float radP = camPitch * MathF.PI / 180f;
             Vector3 camPos = camTarget + new Vector3(
@@ -179,9 +225,10 @@ namespace Prowl.AndroidRunner.Editor.Rendering
             _gl.BindVertexArray(_vaoFloor);
             _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_floorVertCount);
 
-            // GameObjects
+            // Meshes
             foreach (var node in scene.Nodes)
             {
+                if (!node.IsActive) continue;
                 var mesh = node.GetComponent<MeshRendererComponent>();
                 if (mesh == null) continue;
 
@@ -200,14 +247,27 @@ namespace Prowl.AndroidRunner.Editor.Rendering
                 }
             }
 
-            // Gizmo
+            // 3. Selection Box Outline & Gizmos
             if (isEditMode && selectedNode != null)
             {
                 _gl.Disable(EnableCap.DepthTest);
-                var gMat = Matrix4x4.Transpose(Matrix4x4.CreateTranslation(selectedNode.Transform.Position));
-                _gl.UniformMatrix4(locModel, 1, false, (float*)&gMat);
+                var selMat = Matrix4x4.Transpose(selectedNode.Transform.GetWorldMatrix());
+                _gl.UniformMatrix4(locModel, 1, false, (float*)&selMat);
+                _gl.BindVertexArray(_vaoBoxOutline);
+                _gl.DrawArrays(PrimitiveType.Lines, 0, 24);
+
+                // XYZ Arrows
+                var gizmoMat = Matrix4x4.Transpose(Matrix4x4.CreateTranslation(selectedNode.Transform.Position));
+                _gl.UniformMatrix4(locModel, 1, false, (float*)&gizmoMat);
                 _gl.BindVertexArray(_vaoGizmo);
                 _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_gizmoVertCount);
+
+                // Light Bulb Icon (if light)
+                if (selectedNode.GetComponent<LightComponent>() != null)
+                {
+                    _gl.BindVertexArray(_vaoLightGizmo);
+                    _gl.DrawArrays(PrimitiveType.Lines, 0, 50);
+                }
             }
         }
 
@@ -261,6 +321,22 @@ namespace Prowl.AndroidRunner.Editor.Rendering
             v.AddRange(r);
         }
 
+        private static void AddBoxLines(List<float> list, Vector3 c, Vector3 s, Vector3 col)
+        {
+            float x = s.X * 0.5f, y = s.Y * 0.5f, z = s.Z * 0.5f;
+            Vector3[] p = {
+                new(c.X-x, c.Y-y, c.Z-z), new(c.X+x, c.Y-y, c.Z-z),
+                new(c.X+x, c.Y-y, c.Z+z), new(c.X-x, c.Y-y, c.Z+z),
+                new(c.X-x, c.Y+y, c.Z-z), new(c.X+x, c.Y+y, c.Z-z),
+                new(c.X+x, c.Y+y, c.Z+z), new(c.X-x, c.Y+y, c.Z+z),
+            };
+            int[] idx = { 0,1, 1,2, 2,3, 3,0,  4,5, 5,6, 6,7, 7,4,  0,4, 1,5, 2,6, 3,7 };
+            foreach (int i in idx)
+            {
+                list.AddRange(new[] { p[i].X, p[i].Y, p[i].Z,  0,1,0,  col.X, col.Y, col.Z });
+            }
+        }
+
         private uint CompileProgram(string vs, string fs)
         {
             uint v = _gl.CreateShader(ShaderType.VertexShader);
@@ -285,6 +361,7 @@ namespace Prowl.AndroidRunner.Editor.Rendering
         {
             _gl.DeleteProgram(_standard3DProgram);
             _gl.DeleteProgram(_skyProgram);
+            _gl.DeleteProgram(_billboardProgram);
         }
     }
 }
