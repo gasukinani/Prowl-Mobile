@@ -81,12 +81,19 @@ namespace Prowl.AndroidRunner.Editor.Scripting
             dialog = new AlertDialog.Builder(ctx)
                 .SetView(dialogView)
                 .Create();
-            dialog.Show();
 
-            dialog.Window?.SetLayout(
-                (int)(ctx.Resources!.DisplayMetrics.WidthPixels * 0.85f),
-                (int)(ctx.Resources!.DisplayMetrics.HeightPixels * 0.88f)
-            );
+            if (dialog != null)
+            {
+                dialog.Show();
+                var metrics = ctx.Resources?.DisplayMetrics;
+                if (metrics != null && dialog.Window != null)
+                {
+                    dialog.Window.SetLayout(
+                        (int)(metrics.WidthPixels * 0.85f),
+                        (int)(metrics.HeightPixels * 0.88f)
+                    );
+                }
+            }
         }
     }
 }
