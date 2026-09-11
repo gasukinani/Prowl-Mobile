@@ -1,9 +1,9 @@
 using Android.App;
 using Android.Content.PM;
 using Android.OS;
+using Android.Views;
 using Silk.NET.Maths;
 using Silk.NET.Windowing;
-using Silk.NET.Windowing.Sdl;
 
 namespace Prowl.AndroidRunner
 {
@@ -11,8 +11,10 @@ namespace Prowl.AndroidRunner
         Label = "Prowl Mobile",
         MainLauncher = true,
         ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize | ConfigChanges.KeyboardHidden,
-        ScreenOrientation = ScreenOrientation.SensorLandscape)]
-    public class MainActivity : SilkActivity
+        ScreenOrientation = ScreenOrientation.SensorLandscape,
+        Theme = "@android:style/Theme.NoTitleBar.Fullscreen"
+    )]
+    public class MainActivity : Activity
     {
         private IView? _view;
 
@@ -20,33 +22,37 @@ namespace Prowl.AndroidRunner
         {
             base.OnCreate(savedInstanceState);
 
-            // 1. I-extract ang assets mula sa APK papunta sa storage
-            string localDataPath = AssetExtractor.EnsureAssetsExtracted(this);
+            // I-extract ang game assets sa internal storage
+            AssetExtractor.EnsureAssetsExtracted(this);
 
-            // 2. I-configure ang Silk.NET para sa OpenGLES 3.0 (Para sa Mobile)
+            // Gumawa ng Silk View para sa Android OpenGL ES
             var options = ViewOptions.Default;
             options.API = new GraphicsAPI(ContextAPI.OpenGLES, ContextProfile.Core, ContextFlags.Default, new APIVersion(3, 0));
-            options.VSync = true;
+            options.FramesPerSecond = 60;
+            options.UpdatesPerSecond = 60;
 
-            _view = Silk.NET.Windowing.Window.GetView(options);
+            _view = Window.GetView(options);
 
-            _view.Load += () =>
-            {
-                // I-initialize ang Prowl Runtime at ituro ang data path
-                // Prowl.Runtime.Application.Initialize(localDataPath);
-            };
+            _view.Load += OnLoad;
+            _view.Render += OnRender;
+            _view.Update += OnUpdate;
 
-            _view.Update += (delta) =>
-            {
-                // Prowl.Runtime.Application.Update((float)delta);
-            };
+            _view.Initialize();
+        }
 
-            _view.Render += (delta) =>
-            {
-                // Prowl.Runtime.Application.Render((float)delta);
-            };
+        private void OnLoad()
+        {
+            // Initialization logic para sa Prowl Engine
+        }
 
-            _view.Run();
+        private void OnUpdate(double delta)
+        {
+            // Game update loop
+        }
+
+        private void OnRender(double delta)
+        {
+            // Game render loop
         }
 
         protected override void OnDestroy()
