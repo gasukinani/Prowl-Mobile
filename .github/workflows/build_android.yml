@@ -3,7 +3,7 @@ name: Build Android APK
 on:
   push:
     branches: [ "main" ]
-  workflow_dispatch: # Para pwede mong i-click ang "Run workflow" manu-mano
+  workflow_dispatch:
 
 jobs:
   build:
@@ -27,10 +27,12 @@ jobs:
         dotnet-version: '8.0.x'
 
     - name: Install .NET Android Workload
-      run: dotnet workload install android
+      run: dotnet workload install android --skip-manifest-update
 
     - name: Restore dependencies
-      run: dotnet restore Prowl.AndroidRunner/Prowl.AndroidRunner.csproj
+      run: >
+        dotnet restore Prowl.AndroidRunner/Prowl.AndroidRunner.csproj
+        -p:CheckEolWorkloads=false
 
     - name: Build & Package APK
       run: >
@@ -38,6 +40,7 @@ jobs:
         -c Release
         -f net8.0-android
         -p:AndroidPackageFormats=apk
+        -p:CheckEolWorkloads=false
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
