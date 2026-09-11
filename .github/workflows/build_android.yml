@@ -44,10 +44,8 @@ jobs:
         -p:AndroidEnableProfiledAot=false
         -p:AndroidKeyStore=false
 
-    # Awtomatikong tanggalin ang unsigned at intermediate APKs bago mag-upload
     - name: Filter Out Unsigned APKs
       run: |
-        echo "Filtering APK files..."
         find Prowl.AndroidRunner/bin/Release/net10.0-android -type f -name "*.apk" ! -name "*-Signed.apk" -delete || true
 
     - name: Upload Signed APK Artifact
