@@ -38,9 +38,15 @@ jobs:
         -c Release
         -f net10.0-android
         -p:AndroidPackageFormats=apk
+        -p:PublishTrimmed=false
+        -p:RunAOTCompilation=false
+        -p:AndroidLinkMode=None
+        -p:AndroidEnableProfiledAot=false
+        -p:AndroidKeyStore=false
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
         name: Prowl-Android-APK
-        path: Prowl.AndroidRunner/bin/Release/net10.0-android/*-Signed.apk
+        path: Prowl.AndroidRunner/bin/Release/net10.0-android/**/*.apk
+        if-no-files-found: error
