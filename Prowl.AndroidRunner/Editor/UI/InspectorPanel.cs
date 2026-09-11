@@ -26,7 +26,12 @@ namespace Prowl.AndroidRunner.Editor.UI
 
             var scroll = new ScrollView(activity) { LayoutParameters = new LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent) };
             _body = new LinearLayout(activity) { Orientation = Orientation.Vertical };
-            _body.SetPadding(EditorTheme.DpToPx(activity, 10), EditorTheme.DpToPx(6), EditorTheme.DpToPx(activity, 10), EditorTheme.DpToPx(activity, 6));
+            _body.SetPadding(
+                EditorTheme.DpToPx(activity, 10),
+                EditorTheme.DpToPx(activity, 6),
+                EditorTheme.DpToPx(activity, 10),
+                EditorTheme.DpToPx(activity, 6)
+            );
             scroll.AddView(_body);
             AddView(scroll);
         }
@@ -134,9 +139,9 @@ namespace Prowl.AndroidRunner.Editor.UI
             btnAddComp.Click += (s, e) =>
             {
                 var pop = new PopupMenu(_activity, btnAddComp);
-                pop.Menu.Add("C# Script Component");
-                pop.Menu.Add("Mesh Renderer");
-                pop.Menu.Add("Directional Light");
+                pop.Menu?.Add("C# Script Component");
+                pop.Menu?.Add("Mesh Renderer");
+                pop.Menu?.Add("Directional Light");
                 pop.MenuItemClick += (sender, args) =>
                 {
                     string title = args.Item?.TitleFormatted?.ToString() ?? "";
