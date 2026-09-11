@@ -6,6 +6,9 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     
+    <!-- Pigilan ang NETSDK1202 EOL warning/error -->
+    <CheckEolWorkloads>false</CheckEolWorkloads>
+
     <!-- Pigilan ang pagbura ng reflection types ng Prowl -->
     <PublishTrimmed>false</PublishTrimmed>
     <RunAOTCompilation>false</RunAOTCompilation>
