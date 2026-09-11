@@ -30,34 +30,36 @@ namespace Prowl.AndroidRunner
         private IView? _view;
         private GL? _gl;
 
-        // --- Shaders & Buffers ---
+        // --- 3D Shaders & Mesh Buffers ---
         private uint _shaderProgram;
+        private uint _uiProgram;
         private uint _vaoHumanoid, _vboHumanoid;
         private int _humanoidVertCount;
-        private uint _vaoCube, _vboCube;
         private uint _vaoGrid, _vboGrid;
         private int _gridVertCount;
+        private uint _vaoUI, _vboUI;
 
         // --- Engine & Editor State ---
-        public enum EditorTab { Viewport, Hierarchy, Inspector, ScriptEditor, AssetBrowser }
         public enum PlayState { EditMode, PlayMode }
-
         private PlayState _currentState = PlayState.EditMode;
-        private EditorTab _activeTab = EditorTab.Viewport;
+        private bool _showHierarchy = true;
+        private bool _showInspector = true;
 
         // --- Core Scene ---
         private readonly Scene _scene = new Scene();
         private ProwlNode? _selectedNode;
-
-        // --- Script Editor State ---
-        private string _activeScriptCode = "";
-        private string _activeScriptName = "NewScript.cs";
+        private ProwlNode? _heroNode;
 
         // --- Touch & Joystick Navigation ---
         private Vector2 _leftTouchStart, _leftTouchCurrent;
         private bool _isLeftTouching = false;
         private float _rightTouchLastX, _rightTouchLastY;
         private bool _isRightTouching = false;
+
+        // --- Camera Angles ---
+        private float _camYaw = 35.0f;
+        private float _camPitch = 22.0f;
+        private float _camDistance = 6.0f;
 
         protected override void OnCreate(Bundle? savedInstanceState)
         {
@@ -69,21 +71,19 @@ namespace Prowl.AndroidRunner
 
         private void InitSceneNodes()
         {
-            // 1. 3D Humanoid Hero Node
-            var hero = _scene.CreateNode("Hero_Character");
-            hero.Transform.Position = new Vector3(0, 0, 0);
-            var mesh = hero.AddComponent<MeshRendererComponent>();
+            // 1. 3D HERO CHARACTER (Gitna ng mundo)
+            _heroNode = _scene.CreateNode("Hero_Character");
+            _heroNode.Transform.Position = new Vector3(0, 0, 0);
+            var mesh = _heroNode.AddComponent<MeshRendererComponent>();
             mesh.Shape = MeshShape.Humanoid;
             mesh.Color = new Vector3(0.18f, 0.55f, 0.95f);
-            hero.AddComponent<RigidBodyComponent>();
-            hero.AddComponent<BoxColliderComponent>();
-            hero.AttachScript(new PlayerControllerScript());
+            _heroNode.AddComponent<RigidBodyComponent>();
+            _heroNode.AddComponent<BoxColliderComponent>();
+            _heroNode.AttachScript(new PlayerControllerScript());
 
             // 2. Main Camera Node
             var cam = _scene.CreateNode("Main_Camera");
             cam.AddComponent<CameraComponent>();
-            var camScript = cam.AttachScript(new OrbitCameraScript()) as OrbitCameraScript;
-            if (camScript != null) camScript.Target = hero;
 
             // 3. Directional Sun Light
             var sun = _scene.CreateNode("Directional_Sun");
@@ -91,22 +91,19 @@ namespace Prowl.AndroidRunner
             sunLight.Type = LightType.Directional;
             sunLight.Color = new Vector3(1.0f, 0.95f, 0.8f);
 
-            // 4. Particle Emitter Node
-            var particles = _scene.CreateNode("Magic_ParticleEmitter");
+            // 4. Magic Particle Emitter
+            var particles = _scene.CreateNode("Magic_Particles");
             particles.Transform.Position = new Vector3(2.5f, 1.0f, 0);
             particles.AddComponent<ParticleSystemComponent>();
-            particles.AttachScript(new ParticlePulseScript());
 
             // 5. Point Light Torch
             var torch = _scene.CreateNode("PointLight_Torch");
-            torch.Transform.Position = new Vector3(-3.0f, 1.5f, 1.5f);
+            torch.Transform.Position = new Vector3(-2.5f, 1.2f, 1.5f);
             var torchLight = torch.AddComponent<LightComponent>();
             torchLight.Type = LightType.Point;
-            torchLight.Color = new Vector3(1.0f, 0.4f, 0.1f);
-            torch.AttachScript(new LightFlickerScript());
+            torchLight.Color = new Vector3(1.0f, 0.45f, 0.1f);
 
-            _selectedNode = hero;
-            UpdateScriptEditorView();
+            _selectedNode = _heroNode;
             _scene.Start();
         }
 
@@ -130,18 +127,18 @@ namespace Prowl.AndroidRunner
             _gl = _view?.CreateOpenGLES();
             if (_gl == null || _view == null) return;
 
-            _gl.Enable(EnableCap.DepthTest);
-            _gl.DepthFunc(DepthFunction.Less);
-
-            InitShaders();
-            BuildMeshes();
-            BuildGrid();
+            Init3DShaders();
+            InitUIShaders();
+            Build3DHumanoidMesh();
+            Build3DGrid();
+            BuildUIBuffers();
         }
 
-        private void InitShaders()
+        private void Init3DShaders()
         {
             if (_gl == null) return;
 
+            // Inayos ang Matrix Multiplication para sa System.Numerics (v * M)
             string vs = @"#version 300 es
             layout(location = 0) in vec3 aPos;
             layout(location = 1) in vec3 aNorm;
@@ -155,9 +152,9 @@ namespace Prowl.AndroidRunner
             out vec3 vCol;
 
             void main() {
-                vNorm = mat3(transpose(inverse(uModel))) * aNorm;
+                vNorm = (vec4(aNorm, 0.0) * uModel).xyz;
                 vCol = aCol;
-                gl_Position = uProj * uView * uModel * vec4(aPos, 1.0);
+                gl_Position = vec4(aPos, 1.0) * uModel * uView * uProj;
             }";
 
             string fs = @"#version 300 es
@@ -169,60 +166,102 @@ namespace Prowl.AndroidRunner
             void main() {
                 vec3 norm = normalize(vNorm);
                 vec3 lightDir = normalize(vec3(0.5, 1.0, 0.4));
-                float diff = max(dot(norm, lightDir), 0.25);
-                FragColor = vec4((diff + 0.35) * vCol, 1.0);
+                float diff = max(dot(norm, lightDir), 0.0);
+                vec3 ambient = vec3(0.38);
+                vec3 lighting = (ambient + diff * 0.72) * vCol;
+                FragColor = vec4(lighting, 1.0);
             }";
 
-            uint vsObj = _gl.CreateShader(ShaderType.VertexShader);
-            _gl.ShaderSource(vsObj, vs);
-            _gl.CompileShader(vsObj);
-
-            uint fsObj = _gl.CreateShader(ShaderType.FragmentShader);
-            _gl.ShaderSource(fsObj, fs);
-            _gl.CompileShader(fsObj);
-
-            _shaderProgram = _gl.CreateProgram();
-            _gl.AttachShader(_shaderProgram, vsObj);
-            _gl.AttachShader(_shaderProgram, fsObj);
-            _gl.LinkProgram(_shaderProgram);
-
-            _gl.DeleteShader(vsObj);
-            _gl.DeleteShader(fsObj);
+            _shaderProgram = CreateProgram(vs, fs);
         }
 
-        private unsafe void BuildMeshes()
+        private void InitUIShaders()
         {
             if (_gl == null) return;
 
-            // 1. Humanoid Mesh
+            // Inayos ang Orthographic projection multiplication
+            string vs = @"#version 300 es
+            layout(location = 0) in vec2 aPos;
+            layout(location = 1) in vec4 aCol;
+
+            uniform mat4 uOrtho;
+            out vec4 vCol;
+
+            void main() {
+                vCol = aCol;
+                gl_Position = vec4(aPos, 0.0, 1.0) * uOrtho;
+            }";
+
+            string fs = @"#version 300 es
+            precision mediump float;
+            in vec4 vCol;
+            out vec4 FragColor;
+
+            void main() {
+                FragColor = vCol;
+            }";
+
+            _uiProgram = CreateProgram(vs, fs);
+        }
+
+        private uint CreateProgram(string vs, string fs)
+        {
+            uint v = _gl!.CreateShader(ShaderType.VertexShader);
+            _gl.ShaderSource(v, vs);
+            _gl.CompileShader(v);
+
+            uint f = _gl.CreateShader(ShaderType.FragmentShader);
+            _gl.ShaderSource(f, fs);
+            _gl.CompileShader(f);
+
+            uint prog = _gl.CreateProgram();
+            _gl.AttachShader(prog, v);
+            _gl.AttachShader(prog, f);
+            _gl.LinkProgram(prog);
+
+            _gl.DeleteShader(v);
+            _gl.DeleteShader(f);
+            return prog;
+        }
+
+        private unsafe void Build3DHumanoidMesh()
+        {
+            if (_gl == null) return;
+
             List<float> v = new List<float>();
             void AddBox(Vector3 c, Vector3 s, Vector3 col)
             {
                 float x = s.X / 2f, y = s.Y / 2f, z = s.Z / 2f;
                 float[] r = {
+                    // Front
                     c.X-x, c.Y-y, c.Z+z,  0,0,1,  col.X,col.Y,col.Z,  c.X+x, c.Y-y, c.Z+z,  0,0,1,  col.X,col.Y,col.Z,  c.X+x, c.Y+y, c.Z+z,  0,0,1,  col.X,col.Y,col.Z,
                     c.X+x, c.Y+y, c.Z+z,  0,0,1,  col.X,col.Y,col.Z,  c.X-x, c.Y+y, c.Z+z,  0,0,1,  col.X,col.Y,col.Z,  c.X-x, c.Y-y, c.Z+z,  0,0,1,  col.X,col.Y,col.Z,
-                    c.X-x, c.Y-y, c.Z-z,  0,0,-1, col.X*0.8f,col.Y*0.8f,col.Z*0.8f,  c.X-x, c.Y+y, c.Z-z,  0,0,-1, col.X*0.8f,col.Y*0.8f,col.Z*0.8f,  c.X+x, c.Y+y, c.Z-z,  0,0,-1, col.X*0.8f,col.Y*0.8f,col.Z*0.8f,
-                    c.X+x, c.Y+y, c.Z-z,  0,0,-1, col.X*0.8f,col.Y*0.8f,col.Z*0.8f,  c.X+x, c.Y-y, c.Z-z,  0,0,-1, col.X*0.8f,col.Y*0.8f,col.Z*0.8f,  c.X-x, c.Y-y, c.Z-z,  0,0,-1, col.X*0.8f,col.Y*0.8f,col.Z*0.8f,
+                    // Back
+                    c.X-x, c.Y-y, c.Z-z,  0,0,-1, col.X*0.75f,col.Y*0.75f,col.Z*0.75f,  c.X-x, c.Y+y, c.Z-z,  0,0,-1, col.X*0.75f,col.Y*0.75f,col.Z*0.75f,  c.X+x, c.Y+y, c.Z-z,  0,0,-1, col.X*0.75f,col.Y*0.75f,col.Z*0.75f,
+                    c.X+x, c.Y+y, c.Z-z,  0,0,-1, col.X*0.75f,col.Y*0.75f,col.Z*0.75f,  c.X+x, c.Y-y, c.Z-z,  0,0,-1, col.X*0.75f,col.Y*0.75f,col.Z*0.75f,  c.X-x, c.Y-y, c.Z-z,  0,0,-1, col.X*0.75f,col.Y*0.75f,col.Z*0.75f,
+                    // Top
                     c.X-x, c.Y+y, c.Z-z,  0,1,0,  col.X*1.1f,col.Y*1.1f,col.Z*1.1f,  c.X-x, c.Y+y, c.Z+z,  0,1,0,  col.X*1.1f,col.Y*1.1f,col.Z*1.1f,  c.X+x, c.Y+y, c.Z+z,  0,1,0,  col.X*1.1f,col.Y*1.1f,col.Z*1.1f,
                     c.X+x, c.Y+y, c.Z+z,  0,1,0,  col.X*1.1f,col.Y*1.1f,col.Z*1.1f,  c.X+x, c.Y+y, c.Z-z,  0,1,0,  col.X*1.1f,col.Y*1.1f,col.Z*1.1f,  c.X-x, c.Y+y, c.Z-z,  0,1,0,  col.X*1.1f,col.Y*1.1f,col.Z*1.1f,
-                    c.X-x, c.Y-y, c.Z-z,  0,-1,0, col.X*0.6f,col.Y*0.6f,col.Z*0.6f,  c.X+x, c.Y-y, c.Z-z,  0,-1,0, col.X*0.6f,col.Y*0.6f,col.Z*0.6f,  c.X+x, c.Y-y, c.Z+z,  0,-1,0, col.X*0.6f,col.Y*0.6f,col.Z*0.6f,
-                    c.X+x, c.Y-y, c.Z+z,  0,-1,0, col.X*0.6f,col.Y*0.6f,col.Z*0.6f,  c.X-x, c.Y-y, c.Z+z,  0,-1,0, col.X*0.6f,col.Y*0.6f,col.Z*0.6f,  c.X-x, c.Y-y, c.Z-z,  0,-1,0, col.X*0.6f,col.Y*0.6f,col.Z*0.6f,
+                    // Bottom
+                    c.X-x, c.Y-y, c.Z-z,  0,-1,0, col.X*0.5f,col.Y*0.5f,col.Z*0.5f,  c.X+x, c.Y-y, c.Z-z,  0,-1,0, col.X*0.5f,col.Y*0.5f,col.Z*0.5f,  c.X+x, c.Y-y, c.Z+z,  0,-1,0, col.X*0.5f,col.Y*0.5f,col.Z*0.5f,
+                    c.X+x, c.Y-y, c.Z+z,  0,-1,0, col.X*0.5f,col.Y*0.5f,col.Z*0.5f,  c.X-x, c.Y-y, c.Z+z,  0,-1,0, col.X*0.5f,col.Y*0.5f,col.Z*0.5f,  c.X-x, c.Y-y, c.Z-z,  0,-1,0, col.X*0.5f,col.Y*0.5f,col.Z*0.5f,
+                    // Left
                     c.X-x, c.Y-y, c.Z-z, -1,0,0,  col.X*0.7f,col.Y*0.7f,col.Z*0.7f,  c.X-x, c.Y-y, c.Z+z, -1,0,0,  col.X*0.7f,col.Y*0.7f,col.Z*0.7f,  c.X-x, c.Y+y, c.Z+z, -1,0,0,  col.X*0.7f,col.Y*0.7f,col.Z*0.7f,
                     c.X-x, c.Y+y, c.Z+z, -1,0,0,  col.X*0.7f,col.Y*0.7f,col.Z*0.7f,  c.X-x, c.Y+y, c.Z-z, -1,0,0,  col.X*0.7f,col.Y*0.7f,col.Z*0.7f,  c.X-x, c.Y-y, c.Z-z, -1,0,0,  col.X*0.7f,col.Y*0.7f,col.Z*0.7f,
+                    // Right
                     c.X+x, c.Y-y, c.Z-z,  1,0,0,  col.X*0.9f,col.Y*0.9f,col.Z*0.9f,  c.X+x, c.Y+y, c.Z-z,  1,0,0,  col.X*0.9f,col.Y*0.9f,col.Z*0.9f,  c.X+x, c.Y+y, c.Z+z,  1,0,0,  col.X*0.9f,col.Y*0.9f,col.Z*0.9f,
                     c.X+x, c.Y+y, c.Z+z,  1,0,0,  col.X*0.9f,col.Y*0.9f,col.Z*0.9f,  c.X+x, c.Y-y, c.Z+z,  1,0,0,  col.X*0.9f,col.Y*0.9f,col.Z*0.9f,  c.X+x, c.Y-y, c.Z-z,  1,0,0,  col.X*0.9f,col.Y*0.9f,col.Z*0.9f,
                 };
                 v.AddRange(r);
             }
 
-            // Head, Torso, Arms, Legs
-            AddBox(new Vector3(0, 1.9f, 0), new Vector3(0.5f, 0.5f, 0.5f), new Vector3(1.0f, 0.82f, 0.65f));
-            AddBox(new Vector3(0, 1.15f, 0), new Vector3(0.7f, 0.9f, 0.45f), new Vector3(0.18f, 0.55f, 0.95f));
-            AddBox(new Vector3(-0.55f, 1.15f, 0), new Vector3(0.3f, 0.8f, 0.3f), new Vector3(0.9f, 0.75f, 0.2f));
-            AddBox(new Vector3(0.55f, 1.15f, 0), new Vector3(0.3f, 0.8f, 0.3f), new Vector3(0.9f, 0.75f, 0.2f));
-            AddBox(new Vector3(-0.2f, 0.38f, 0), new Vector3(0.28f, 0.75f, 0.35f), new Vector3(0.2f, 0.22f, 0.35f));
-            AddBox(new Vector3(0.2f, 0.38f, 0), new Vector3(0.28f, 0.75f, 0.35f), new Vector3(0.2f, 0.22f, 0.35f));
+            // Head, Torso, Gold Armor Arms, Legs
+            AddBox(new Vector3(0, 1.95f, 0), new Vector3(0.55f, 0.55f, 0.55f), new Vector3(1.0f, 0.82f, 0.65f));
+            AddBox(new Vector3(0, 1.15f, 0), new Vector3(0.75f, 0.95f, 0.5f), new Vector3(0.18f, 0.55f, 0.95f));
+            AddBox(new Vector3(-0.6f, 1.15f, 0), new Vector3(0.32f, 0.85f, 0.32f), new Vector3(0.95f, 0.75f, 0.2f));
+            AddBox(new Vector3(0.6f, 1.15f, 0), new Vector3(0.32f, 0.85f, 0.32f), new Vector3(0.95f, 0.75f, 0.2f));
+            AddBox(new Vector3(-0.22f, 0.38f, 0), new Vector3(0.3f, 0.8f, 0.35f), new Vector3(0.2f, 0.22f, 0.35f));
+            AddBox(new Vector3(0.22f, 0.38f, 0), new Vector3(0.3f, 0.8f, 0.35f), new Vector3(0.2f, 0.22f, 0.35f));
 
             _humanoidVertCount = v.Count / 9;
             _vaoHumanoid = _gl.GenVertexArray();
@@ -242,14 +281,14 @@ namespace Prowl.AndroidRunner
             _gl.EnableVertexAttribArray(2);
         }
 
-        private unsafe void BuildGrid()
+        private unsafe void Build3DGrid()
         {
             if (_gl == null) return;
             List<float> lines = new List<float>();
             int r = 16;
             for (int i = -r; i <= r; i++)
             {
-                Vector3 col = (i == 0) ? new Vector3(0.85f, 0.35f, 0.35f) : new Vector3(0.22f, 0.26f, 0.34f);
+                Vector3 col = (i == 0) ? new Vector3(0.85f, 0.35f, 0.35f) : new Vector3(0.25f, 0.30f, 0.40f);
                 lines.AddRange(new[] { (float)i, 0f, -r, 0f, 1f, 0f, col.X, col.Y, col.Z });
                 lines.AddRange(new[] { (float)i, 0f,  r, 0f, 1f, 0f, col.X, col.Y, col.Z });
                 lines.AddRange(new[] { -r, 0f, (float)i, 0f, 1f, 0f, col.X, col.Y, col.Z });
@@ -274,6 +313,13 @@ namespace Prowl.AndroidRunner
             _gl.EnableVertexAttribArray(2);
         }
 
+        private void BuildUIBuffers()
+        {
+            if (_gl == null) return;
+            _vaoUI = _gl.GenVertexArray();
+            _vboUI = _gl.GenBuffer();
+        }
+
         private void OnResize(Vector2D<int> size)
         {
             if (_gl != null)
@@ -284,7 +330,7 @@ namespace Prowl.AndroidRunner
         {
             float dt = (float)delta;
 
-            // Touch Joystick Input
+            // Touch Joystick Vector
             Vector2 joy = Vector2.Zero;
             if (_isLeftTouching)
             {
@@ -300,17 +346,33 @@ namespace Prowl.AndroidRunner
         {
             if (_gl == null || _view == null) return;
 
-            // Studio Dark Background
-            _gl.ClearColor(0.08f, 0.10f, 0.14f, 1.0f);
+            // 1. Studio Dark Slate Viewport Background
+            _gl.ClearColor(0.11f, 0.13f, 0.17f, 1.0f);
             _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+
+            // ==========================================
+            // 2. 3D WORLD PASS (Character & Grid)
+            // ==========================================
+            _gl.Enable(EnableCap.DepthTest);
+            _gl.DepthFunc(DepthFunction.Less);
+            _gl.Disable(EnableCap.Blend);
+            _gl.Disable(EnableCap.CullFace);
 
             _gl.UseProgram(_shaderProgram);
 
-            // 3D Perspective Projection & View
             float aspect = (float)_view.Size.X / Math.Max(1, _view.Size.Y);
-            var proj = Matrix4x4.CreatePerspectiveFieldOfView(MathF.PI / 3.5f, aspect, 0.1f, 100.0f);
-            var cam = _scene.FindComponent<CameraComponent>();
-            var view = cam != null ? cam.GetViewMatrix() : Matrix4x4.CreateLookAt(new Vector3(0, 4, -7), Vector3.Zero, Vector3.UnitY);
+            var proj = Matrix4x4.CreatePerspectiveFieldOfView(MathF.PI / 3.2f, aspect, 0.1f, 100.0f);
+
+            // Camera Orbit Position nakatutok sa Hero Character
+            Vector3 targetPos = _heroNode?.Transform.Position ?? Vector3.Zero;
+            float radY = _camYaw * MathF.PI / 180f;
+            float radP = _camPitch * MathF.PI / 180f;
+
+            float camX = targetPos.X + _camDistance * MathF.Cos(radP) * MathF.Sin(radY);
+            float camY = targetPos.Y + _camDistance * MathF.Sin(radP) + 1.2f;
+            float camZ = targetPos.Z + _camDistance * MathF.Cos(radP) * MathF.Cos(radY);
+
+            var view = Matrix4x4.CreateLookAt(new Vector3(camX, camY, camZ), targetPos + new Vector3(0, 1.0f, 0), Vector3.UnitY);
 
             int locProj = _gl.GetUniformLocation(_shaderProgram, "uProj");
             int locView = _gl.GetUniformLocation(_shaderProgram, "uView");
@@ -325,7 +387,7 @@ namespace Prowl.AndroidRunner
             _gl.BindVertexArray(_vaoGrid);
             _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_gridVertCount);
 
-            // Draw Scene Nodes (Meshes & Characters)
+            // Draw 3D Humanoid Character Nodes
             foreach (var node in _scene.Nodes)
             {
                 var mesh = node.GetComponent<MeshRendererComponent>();
@@ -337,10 +399,118 @@ namespace Prowl.AndroidRunner
                     _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_humanoidVertCount);
                 }
             }
+
+            // ==========================================
+            // 3. 2D EDITOR GUI OVERLAY PASS
+            // ==========================================
+            _gl.Disable(EnableCap.DepthTest);
+            _gl.Enable(EnableCap.Blend);
+            _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+
+            _gl.UseProgram(_uiProgram);
+            var ortho = Matrix4x4.CreateOrthographicOffCenter(0, _view.Size.X, _view.Size.Y, 0, -1f, 1f);
+            int locOrtho = _gl.GetUniformLocation(_uiProgram, "uOrtho");
+            _gl.UniformMatrix4(locOrtho, 1, false, (float*)&ortho);
+
+            RenderEditorUI();
+        }
+
+        private unsafe void RenderEditorUI()
+        {
+            if (_gl == null || _view == null) return;
+
+            List<float> uiVerts = new List<float>();
+
+            void DrawRect(float x, float y, float w, float h, Vector4 col)
+            {
+                float[] r = {
+                    x, y,       col.X, col.Y, col.Z, col.W,
+                    x+w, y,     col.X, col.Y, col.Z, col.W,
+                    x+w, y+h,   col.X, col.Y, col.Z, col.W,
+                    x+w, y+h,   col.X, col.Y, col.Z, col.W,
+                    x, y+h,     col.X, col.Y, col.Z, col.W,
+                    x, y,       col.X, col.Y, col.Z, col.W,
+                };
+                uiVerts.AddRange(r);
+            }
+
+            float screenW = _view.Size.X;
+            float screenH = _view.Size.Y;
+
+            // 1. TOP TOOLBAR
+            DrawRect(0, 0, screenW, 100, new Vector4(0.07f, 0.09f, 0.13f, 0.92f));
+            // Button 1: Mode Toggle
+            Vector4 modeCol = (_currentState == PlayState.PlayMode) ? new Vector4(0.18f, 0.80f, 0.44f, 1f) : new Vector4(0.95f, 0.55f, 0.15f, 1f);
+            DrawRect(15, 15, 200, 70, modeCol);
+            // Button 2: Add Node (Cyan Blue)
+            DrawRect(230, 15, 190, 70, new Vector4(0.18f, 0.55f, 0.95f, 0.9f));
+            // Button 3: Attach Script (Purple)
+            DrawRect(435, 15, 200, 70, new Vector4(0.65f, 0.35f, 0.95f, 0.9f));
+            // Button 4: Selected Node Info Chip
+            DrawRect(650, 15, 260, 70, new Vector4(0.14f, 0.18f, 0.25f, 0.95f));
+
+            // 2. LEFT HIERARCHY DRAWER
+            if (_showHierarchy)
+            {
+                DrawRect(15, 120, 280, 360, new Vector4(0.08f, 0.10f, 0.15f, 0.85f));
+                // Header
+                DrawRect(15, 120, 280, 45, new Vector4(0.14f, 0.18f, 0.26f, 0.95f));
+                // Node Items Chips
+                for (int i = 0; i < Math.Min(5, _scene.Nodes.Count); i++)
+                {
+                    Vector4 itemCol = (_scene.Nodes[i] == _selectedNode) ? new Vector4(0.18f, 0.55f, 0.95f, 0.80f) : new Vector4(0.15f, 0.19f, 0.26f, 0.65f);
+                    DrawRect(25, 175 + (i * 55), 260, 45, itemCol);
+                }
+            }
+
+            // 3. RIGHT INSPECTOR CARD
+            if (_showInspector)
+            {
+                float inspX = screenW - 320;
+                DrawRect(inspX, 120, 305, 420, new Vector4(0.08f, 0.10f, 0.15f, 0.85f));
+                // Header
+                DrawRect(inspX, 120, 305, 45, new Vector4(0.14f, 0.18f, 0.26f, 0.95f));
+                // Transform Section
+                DrawRect(inspX + 10, 175, 285, 100, new Vector4(0.15f, 0.19f, 0.26f, 0.65f));
+                // Components Section
+                DrawRect(inspX + 10, 285, 285, 115, new Vector4(0.15f, 0.19f, 0.26f, 0.65f));
+                // Attached Script Section (Gold Accent)
+                DrawRect(inspX + 10, 410, 285, 110, new Vector4(0.38f, 0.32f, 0.15f, 0.75f));
+            }
+
+            // 4. TOUCH JOYSTICK VISUAL
+            if (_isLeftTouching)
+            {
+                // Outer ring
+                DrawRect(_leftTouchStart.X - 60, _leftTouchStart.Y - 60, 120, 120, new Vector4(1f, 1f, 1f, 0.25f));
+                // Inner knob
+                DrawRect(_leftTouchCurrent.X - 25, _leftTouchCurrent.Y - 25, 50, 50, new Vector4(0.2f, 0.65f, 1.0f, 0.90f));
+            }
+            else
+            {
+                // Idle Joystick Hint (Kaliwang Ibaba)
+                DrawRect(50, screenH - 170, 120, 120, new Vector4(1f, 1f, 1f, 0.12f));
+                DrawRect(85, screenH - 135, 50, 50, new Vector4(0.2f, 0.65f, 1.0f, 0.35f));
+            }
+
+            // Upload and Draw 2D UI
+            _gl.BindVertexArray(_vaoUI);
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboUI);
+            fixed (float* p = uiVerts.ToArray())
+            {
+                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(uiVerts.Count * sizeof(float)), p, BufferUsageARB.DynamicDraw);
+            }
+            uint stride = 6 * sizeof(float);
+            _gl.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, stride, (void*)0);
+            _gl.EnableVertexAttribArray(0);
+            _gl.VertexAttribPointer(1, 4, VertexAttribPointerType.Float, false, stride, (void*)(2 * sizeof(float)));
+            _gl.EnableVertexAttribArray(1);
+
+            _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)(uiVerts.Count / 6));
         }
 
         // ==========================================================
-        // DUAL TOUCH & SCRIPT EDITOR ACTIONS
+        // DUAL TOUCH & INTERACTIVE ACTIONS
         // ==========================================================
         public override bool OnTouchEvent(MotionEvent? e)
         {
@@ -358,7 +528,7 @@ namespace Prowl.AndroidRunner
                     case MotionEventActions.Down:
                     case MotionEventActions.PointerDown:
                         // Top Bar Action Buttons Tap
-                        if (y < 120)
+                        if (y < 110)
                         {
                             HandleTopBarTap(x);
                             return true;
@@ -387,12 +557,8 @@ namespace Prowl.AndroidRunner
                             float dx = x - _rightTouchLastX;
                             float dy = y - _rightTouchLastY;
 
-                            var orbit = _scene.FindScript<OrbitCameraScript>();
-                            if (orbit != null)
-                            {
-                                orbit.Yaw += dx * 0.35f;
-                                orbit.Pitch = Math.Clamp(orbit.Pitch - dy * 0.35f, 5.0f, 85.0f);
-                            }
+                            _camYaw += dx * 0.35f;
+                            _camPitch = Math.Clamp(_camPitch - dy * 0.35f, 5.0f, 85.0f);
 
                             _rightTouchLastX = x;
                             _rightTouchLastY = y;
@@ -412,74 +578,47 @@ namespace Prowl.AndroidRunner
 
         private void HandleTopBarTap(float touchX)
         {
-            if (_view == null) return;
-            float btnW = _view.Size.X / 4f;
-
-            if (touchX < btnW)
+            if (touchX < 220)
             {
-                // Toggle Play / Edit Mode
+                // Mode Toggle: EDIT / PLAY
                 _currentState = (_currentState == PlayState.EditMode) ? PlayState.PlayMode : PlayState.EditMode;
-                Log.Info(LogTag, $"Mode Switched: {_currentState}");
+                Log.Info(LogTag, $"Mode: {_currentState}");
             }
-            else if (touchX < btnW * 2)
+            else if (touchX < 425)
             {
                 // Add New 3D Node
-                var newNode = _scene.CreateNode($"Node_{_scene.Nodes.Count + 1}");
-                newNode.Transform.Position = new Vector3((_scene.Nodes.Count % 4) * 2f - 3f, 0, 2f);
+                var newNode = _scene.CreateNode($"Char_{_scene.Nodes.Count + 1}");
+                newNode.Transform.Position = new Vector3((_scene.Nodes.Count % 4) * 2f - 3f, 0, 1.5f);
                 var m = newNode.AddComponent<MeshRendererComponent>();
                 m.Shape = MeshShape.Humanoid;
                 newNode.AttachScript(new RotatorScript());
                 _selectedNode = newNode;
-                UpdateScriptEditorView();
-                Log.Info(LogTag, $"Added Node: {newNode.Name}");
+                Log.Info(LogTag, $"Added: {newNode.Name}");
             }
-            else if (touchX < btnW * 3)
+            else if (touchX < 640)
             {
-                // Attach New C# Script to Selected Node
+                // Attach Script
                 if (_selectedNode != null)
                 {
-                    var newScript = new RotatorScript { RotationSpeed = 90f };
-                    _selectedNode.AttachScript(newScript);
-                    UpdateScriptEditorView();
-                    Log.Info(LogTag, $"Attached C# Script to {_selectedNode.Name}");
+                    _selectedNode.AttachScript(new RotatorScript { RotationSpeed = 90f });
+                    Log.Info(LogTag, $"Script Attached to {_selectedNode.Name}");
                 }
             }
             else
             {
-                // Cycle Selection
+                // Cycle Select Node
                 int idx = _scene.Nodes.IndexOf(_selectedNode!);
                 idx = (idx + 1) % _scene.Nodes.Count;
                 _selectedNode = _scene.Nodes[idx];
-                UpdateScriptEditorView();
-                Log.Info(LogTag, $"Selected Node: {_selectedNode.Name}");
+                Log.Info(LogTag, $"Selected: {_selectedNode.Name}");
             }
-        }
-
-        private void UpdateScriptEditorView()
-        {
-            if (_selectedNode == null) return;
-            var sb = new StringBuilder();
-            sb.AppendLine($"// ==========================================");
-            sb.AppendLine($"// Prowl C# Script: {_selectedNode.Name}.cs");
-            sb.AppendLine($"// ==========================================");
-            sb.AppendLine("using Prowl.Runtime;\n");
-            sb.AppendLine($"public class {_selectedNode.Name.Replace(" ", "_")} : MonoBehaviour");
-            sb.AppendLine("{");
-            sb.AppendLine($"    // Position: {_selectedNode.Transform.Position}");
-            sb.AppendLine($"    // Attached Components: {_selectedNode.Components.Count}");
-            sb.AppendLine($"    // Attached Scripts: {_selectedNode.Scripts.Count}\n");
-            sb.AppendLine("    public override void Update(float deltaTime)");
-            sb.AppendLine("    {");
-            sb.AppendLine("        // Custom game logic running on Android");
-            sb.AppendLine("    }");
-            sb.AppendLine("}");
-            _activeScriptCode = sb.ToString();
         }
 
         protected override void OnDestroy()
         {
             base.OnDestroy();
             _gl?.DeleteProgram(_shaderProgram);
+            _gl?.DeleteProgram(_uiProgram);
             _gl?.Dispose();
             _view?.Dispose();
         }
@@ -508,26 +647,6 @@ namespace Prowl.AndroidRunner
         public void Update(float dt, Vector2 joy, bool isPlaying)
         {
             foreach (var n in Nodes) n.Update(dt, joy, isPlaying);
-        }
-
-        public T? FindComponent<T>() where T : Component
-        {
-            foreach (var n in Nodes)
-            {
-                var c = n.GetComponent<T>();
-                if (c != null) return c;
-            }
-            return null;
-        }
-
-        public T? FindScript<T>() where T : MonoBehaviour
-        {
-            foreach (var n in Nodes)
-            {
-                foreach (var s in n.Scripts)
-                    if (s is T match) return match;
-            }
-            return null;
         }
     }
 
@@ -580,7 +699,7 @@ namespace Prowl.AndroidRunner
             foreach (var c in Components) c.Update(dt);
             foreach (var s in Scripts)
             {
-                if (isPlaying || s is OrbitCameraScript)
+                if (isPlaying)
                     s.UpdateWithInput(dt, joy);
             }
         }
@@ -615,31 +734,16 @@ namespace Prowl.AndroidRunner
         public virtual void Update(float dt) { }
     }
 
-    // =========================================================================
-    // PROWL MONOBEHAVIOUR SCRIPTING BASE
-    // =========================================================================
-
     public abstract class MonoBehaviour : Component
     {
-        public bool Enabled { get; set; } = true;
-        public virtual void OnEnable() { }
-        public virtual void OnDisable() { }
-        public virtual void FixedUpdate() { }
-        public virtual void LateUpdate() { }
-        public virtual void OnCollisionEnter(ProwlNode other) { }
         public virtual void UpdateWithInput(float dt, Vector2 joystickInput) => Update(dt);
     }
 
-    // =========================================================================
-    // BUILT-IN PROWL ENGINE COMPONENTS
-    // =========================================================================
-
-    public enum MeshShape { Humanoid, Cube, Sphere, Cylinder, Capsule, CustomObj }
+    public enum MeshShape { Humanoid, Cube, Sphere }
     public class MeshRendererComponent : Component
     {
         public MeshShape Shape { get; set; } = MeshShape.Humanoid;
         public Vector3 Color { get; set; } = Vector3.One;
-        public bool CastShadows { get; set; } = true;
     }
 
     public enum LightType { Directional, Point, Spot }
@@ -647,49 +751,20 @@ namespace Prowl.AndroidRunner
     {
         public LightType Type { get; set; } = LightType.Directional;
         public Vector3 Color { get; set; } = Vector3.One;
-        public float Intensity { get; set; } = 1.0f;
-        public float Range { get; set; } = 10.0f;
     }
 
-    public class CameraComponent : Component
-    {
-        public float FieldOfView { get; set; } = 60.0f;
-        public float NearClip { get; set; } = 0.1f;
-        public float FarClip { get; set; } = 100.0f;
-
-        public Matrix4x4 GetViewMatrix()
-        {
-            return Matrix4x4.CreateLookAt(Transform.Position, Transform.Position + new Vector3(0, 0, 1), Vector3.UnitY);
-        }
-    }
-
-    public class RigidBodyComponent : Component
-    {
-        public float Mass { get; set; } = 1.0f;
-        public bool UseGravity { get; set; } = true;
-        public Vector3 Velocity { get; set; } = Vector3.Zero;
-    }
-
-    public class BoxColliderComponent : Component
-    {
-        public Vector3 Size { get; set; } = Vector3.One;
-    }
-
-    public class ParticleSystemComponent : Component
-    {
-        public int ParticleCount { get; set; } = 50;
-        public float EmissionRate { get; set; } = 10f;
-        public Vector3 ParticleColor { get; set; } = new Vector3(1f, 0.8f, 0.2f);
-    }
+    public class CameraComponent : Component { }
+    public class RigidBodyComponent : Component { }
+    public class BoxColliderComponent : Component { }
+    public class ParticleSystemComponent : Component { }
 
     // =========================================================================
-    // BUILT-IN C# SCRIPT LIBRARY
+    // BUILT-IN SCRIPT LIBRARY
     // =========================================================================
 
-    // 1. Player Movement Controller Script
     public class PlayerControllerScript : MonoBehaviour
     {
-        public float Speed = 4.0f;
+        public float Speed = 4.5f;
         private float _walkTimer = 0f;
 
         public override void UpdateWithInput(float dt, Vector2 joy)
@@ -712,29 +787,6 @@ namespace Prowl.AndroidRunner
         }
     }
 
-    // 2. 3rd-Person Orbit Follow Camera Script
-    public class OrbitCameraScript : MonoBehaviour
-    {
-        public ProwlNode? Target { get; set; }
-        public float Distance = 6.5f;
-        public float Yaw = 35.0f;
-        public float Pitch = 25.0f;
-
-        public override void Update(float dt)
-        {
-            if (Target == null) return;
-            float radY = Yaw * MathF.PI / 180f;
-            float radP = Pitch * MathF.PI / 180f;
-
-            float ox = Distance * MathF.Cos(radP) * MathF.Sin(radY);
-            float oy = Distance * MathF.Sin(radP);
-            float oz = Distance * MathF.Cos(radP) * MathF.Cos(radY);
-
-            Transform.Position = Target.Transform.Position + new Vector3(ox, oy + 1.2f, oz);
-        }
-    }
-
-    // 3. Continuous Object Rotator Script
     public class RotatorScript : MonoBehaviour
     {
         public float RotationSpeed = 45.0f;
@@ -742,29 +794,6 @@ namespace Prowl.AndroidRunner
         public override void Update(float dt)
         {
             Transform.Rotate(new Vector3(0, RotationSpeed * dt, 0));
-        }
-    }
-
-    // 4. Torch Light Dynamic Flicker Script
-    public class LightFlickerScript : MonoBehaviour
-    {
-        private float _t = 0;
-        public override void Update(float dt)
-        {
-            _t += dt * 14.0f;
-            var light = Node?.GetComponent<LightComponent>();
-            if (light != null) light.Intensity = 1.0f + MathF.Sin(_t) * 0.35f;
-        }
-    }
-
-    // 5. Particle System Pulse Script
-    public class ParticlePulseScript : MonoBehaviour
-    {
-        private float _t = 0;
-        public override void Update(float dt)
-        {
-            _t += dt * 3.0f;
-            Transform.Position = new Vector3(Transform.Position.X, 1.0f + MathF.Sin(_t) * 0.4f, Transform.Position.Z);
         }
     }
 }
