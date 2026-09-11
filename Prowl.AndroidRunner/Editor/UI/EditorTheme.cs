@@ -8,7 +8,6 @@ namespace Prowl.AndroidRunner.Editor.UI
 {
     public static class EditorTheme
     {
-        // Colors
         public static readonly Color BgDarkest   = Color.ParseColor("#0e1017");
         public static readonly Color BgDark      = Color.ParseColor("#14171e");
         public static readonly Color BgPanel     = Color.ParseColor("#161922");
