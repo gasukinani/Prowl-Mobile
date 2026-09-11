@@ -2,7 +2,6 @@ using System;
 using Android.App;
 using Android.Content;
 using Android.Graphics;
-using Android.Graphics.Typeface;
 using Android.Views;
 using Android.Widget;
 using Prowl.AndroidRunner.Editor.UI;
