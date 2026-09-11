@@ -44,13 +44,18 @@ jobs:
         -p:AndroidEnableProfiledAot=false
         -p:AndroidKeyStore=false
 
-    - name: Filter Out Unsigned APKs
+    # Kopyahin lamang ang Signed APK sa malinis na folder (walang kasamang publish/ o bin/ folders)
+    - name: Prepare Single APK Output
       run: |
-        find Prowl.AndroidRunner/bin/Release/net10.0-android -type f -name "*.apk" ! -name "*-Signed.apk" -delete || true
+        mkdir -p dist
+        find Prowl.AndroidRunner/bin/Release/net10.0-android -type f -name "*-Signed.apk" -exec cp {} dist/ \;
+        echo "Listing output APKs in dist:"
+        ls -la dist/
 
+    # I-upload ang APK na diretso sa root ng zip
     - name: Upload Signed APK Artifact
       uses: actions/upload-artifact@v4
       with:
         name: Prowl-Android-APK
-        path: Prowl.AndroidRunner/bin/Release/net10.0-android/**/*-Signed.apk
+        path: dist/*
         if-no-files-found: error
