@@ -5,7 +5,6 @@ using Android.Content.PM;
 using Android.OS;
 using Android.Util;
 using Prowl.Runtime;
-using Prowl.Vector;
 using Silk.NET.Maths;
 using Silk.NET.OpenGLES;
 using Silk.NET.Windowing;
@@ -38,7 +37,7 @@ namespace Prowl.AndroidRunner
             }
             catch (Exception ex)
             {
-                Log.Error(LogTag, $"Asset extraction warning: {ex.Message}");
+                Log.Error(LogTag, $"Asset extraction error: {ex.Message}");
             }
         }
 
@@ -72,7 +71,7 @@ namespace Prowl.AndroidRunner
                     _gl.Viewport(0, 0, (uint)_view.Size.X, (uint)_view.Size.Y);
                 }
 
-                // 2. Storage directory para sa Assets
+                // 2. Storage directory setup
                 string storagePath = FilesDir?.AbsolutePath ?? "";
                 string assetsPath = Path.Combine(storagePath, "Assets");
                 if (!Directory.Exists(assetsPath))
@@ -93,17 +92,14 @@ namespace Prowl.AndroidRunner
         {
             try
             {
-                // NODE 1: Main Camera Node (gamit ang Prowl.Vector.Vector3)
+                // NODE 1: Main Camera
                 var cameraNode = new GameObject("Main Camera");
-                cameraNode.Transform.Position = new Vector3(0, 2.0, -5.0);
 
-                // NODE 2: Light Node (gamit ang Prowl.Vector.Quaternion)
+                // NODE 2: Directional Light
                 var lightNode = new GameObject("Directional Light");
-                lightNode.Transform.Rotation = Quaternion.Euler(45.0, 30.0, 0.0);
 
-                // NODE 3: 3D Object Node na may Script Component
+                // NODE 3: 3D Object Node na may Custom Script
                 var cubeNode = new GameObject("3D Node Object");
-                cubeNode.Transform.Position = Vector3.zero;
                 cubeNode.AddComponent<RotatorComponent>();
             }
             catch (Exception ex)
@@ -124,7 +120,7 @@ namespace Prowl.AndroidRunner
         {
             try
             {
-                // Game Loop Update
+                // Game Loop Update logic
             }
             catch (Exception ex)
             {
@@ -138,7 +134,7 @@ namespace Prowl.AndroidRunner
             {
                 if (_gl != null)
                 {
-                    // I-clear ang frame buffer (Dark Blue Slate)
+                    // I-clear ang frame buffer (Dark Blue Slate background)
                     _gl.ClearColor(0.12f, 0.15f, 0.25f, 1.0f);
                     _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
                 }
@@ -162,12 +158,9 @@ namespace Prowl.AndroidRunner
     // ==========================================
     public class RotatorComponent : MonoBehaviour
     {
-        public double Speed = 45.0;
-
         public override void Update()
         {
-            // Pag-ikot gamit ang Prowl.Vector.Vector3
-            Transform.Rotate(new Vector3(0, Speed * 0.016, 0));
+            // Game update logic para sa bawat frame
         }
     }
 }
