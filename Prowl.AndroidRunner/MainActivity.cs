@@ -3,6 +3,7 @@ using Android.Content.PM;
 using Android.OS;
 using Android.Util;
 using Silk.NET.Maths;
+using Silk.NET.OpenGLES;
 using Silk.NET.Windowing;
 using Silk.NET.Windowing.Sdl.Android;
 using SilkWindow = Silk.NET.Windowing.Window;
@@ -20,23 +21,23 @@ namespace Prowl.AndroidRunner
     {
         private const string LogTag = "ProwlAndroidRunner";
         private IView? _view;
+        private GL? _gl;
 
         protected override void OnCreate(Bundle? savedInstanceState)
         {
             base.OnCreate(savedInstanceState);
 
-            // 1. I-extract ang game assets sa internal storage bago tumakbo ang engine
             try
             {
+                // 1. I-extract ang game assets sa internal storage
                 AssetExtractor.EnsureAssetsExtracted(this);
             }
             catch (System.Exception ex)
             {
-                Log.Error(LogTag, $"Asset extraction failed: {ex.Message}");
+                Log.Error(LogTag, $"Asset extraction error: {ex.Message}");
             }
         }
 
-        // Dito tinatawag ng SilkActivity ang game loop kapag ready na ang SDL Android Surface
         protected override void OnRun()
         {
             try
@@ -46,42 +47,67 @@ namespace Prowl.AndroidRunner
                 options.FramesPerSecond = 60;
                 options.UpdatesPerSecond = 60;
 
-                // Kunin ang view gamit ang SilkWindow
                 _view = SilkWindow.GetView(options);
 
                 _view.Load += OnLoad;
+                _view.Resize += OnResize;
                 _view.Render += OnRender;
                 _view.Update += OnUpdate;
 
-                // Simulan ang Silk view loop
                 _view.Run();
             }
             catch (System.Exception ex)
             {
-                Log.Error(LogTag, $"Fatal error in OnRun: {ex}");
+                Log.Error(LogTag, $"Fatal error during OnRun: {ex}");
                 throw;
             }
         }
 
         private void OnLoad()
         {
-            Log.Info(LogTag, "Prowl Engine OnLoad initialized successfully!");
-            // Initialization logic para sa Prowl Runtime
+            Log.Info(LogTag, "Initializing OpenGL ES context...");
+
+            // Kumuha ng OpenGL ES API instance mula sa Silk View
+            _gl = _view?.CreateOpenGLES();
+
+            if (_gl != null && _view != null)
+            {
+                _gl.Viewport(0, 0, (uint)_view.Size.X, (uint)_view.Size.Y);
+                Log.Info(LogTag, $"Viewport configured: {_view.Size.X}x{_view.Size.Y}");
+            }
+
+            // DITO I-INITIALIZE ANG PROWL ENGINE (hal. Prowl.Runtime components)
+        }
+
+        private void OnResize(Vector2D<int> size)
+        {
+            if (_gl != null)
+            {
+                _gl.Viewport(0, 0, (uint)size.X, (uint)size.Y);
+            }
         }
 
         private void OnUpdate(double delta)
         {
-            // Game update loop
+            // Game logic update (Prowl Engine Update)
         }
 
         private void OnRender(double delta)
         {
-            // Game render loop
+            if (_gl == null) return;
+
+            // 1. Mag-clear ng screen gamit ang kulay (RGB: Cornflower Blue) para mapatunayang buhay ang graphics pipeline
+            _gl.ClearColor(0.2f, 0.4f, 0.8f, 1.0f);
+            _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+
+            // 2. DITO TATAWAGIN ANG PROWL ENGINE RENDER PIPELINE:
+            // Halimbawa: Prowl.Runtime.Graphics.Render();
         }
 
         protected override void OnDestroy()
         {
             base.OnDestroy();
+            _gl?.Dispose();
             _view?.Dispose();
         }
     }
