@@ -1,0 +1,46 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: # Para pwede mong i-click ang "Run workflow" manu-mano
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Setup Java (JDK 17)
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: Setup .NET 8 SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Install .NET Android Workload
+      run: dotnet workload install android
+
+    - name: Restore dependencies
+      run: dotnet restore Prowl.AndroidRunner/Prowl.AndroidRunner.csproj
+
+    - name: Build & Package APK
+      run: >
+        dotnet publish Prowl.AndroidRunner/Prowl.AndroidRunner.csproj
+        -c Release
+        -f net8.0-android
+        -p:AndroidPackageFormats=apk
+
+    - name: Upload APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Prowl-Android-APK
+        path: Prowl.AndroidRunner/bin/Release/net8.0-android/*-Signed.apk
