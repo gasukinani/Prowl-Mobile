@@ -1,5 +1,4 @@
-                
-                using System;
+using System;
 using System.IO;
 using System.Numerics;
 using Android.App;
@@ -8,9 +7,12 @@ using Android.OS;
 using Android.Util;
 using Prowl.Runtime;
 using Prowl.Runtime.Rendering;
+using Prowl.Runtime.SceneManagement;
 using Silk.NET.Maths;
+using Silk.NET.OpenGLES;
 using Silk.NET.Windowing;
 using Silk.NET.Windowing.Sdl.Android;
+using ProwlApp = Prowl.Runtime.Application;
 using SilkWindow = Silk.NET.Windowing.Window;
 
 namespace Prowl.AndroidRunner
@@ -26,6 +28,7 @@ namespace Prowl.AndroidRunner
     {
         private const string LogTag = "ProwlMobile";
         private IView? _view;
+        private GL? _gl;
 
         protected override void OnCreate(Bundle? savedInstanceState)
         {
@@ -33,7 +36,7 @@ namespace Prowl.AndroidRunner
 
             try
             {
-                // I-extract ang game assets sa internal app storage
+                // I-extract ang game assets sa internal storage
                 AssetExtractor.EnsureAssetsExtracted(this);
             }
             catch (Exception ex)
@@ -65,19 +68,23 @@ namespace Prowl.AndroidRunner
 
             try
             {
-                // 1. Storage setup
+                // 1. OpenGL ES context setup
+                _gl = _view?.CreateOpenGLES();
+                if (_gl != null && _view != null)
+                {
+                    _gl.Viewport(0, 0, (uint)_view.Size.X, (uint)_view.Size.Y);
+                }
+
+                // 2. Storage at Project setup
                 string storagePath = FilesDir?.AbsolutePath ?? "";
                 string assetsPath = Path.Combine(storagePath, "Assets");
                 if (!Directory.Exists(assetsPath))
                     Directory.CreateDirectory(assetsPath);
 
-                // 2. Initialize Core Prowl Runtime
-                Application.Initialize();
-
                 // 3. I-setup ang 3D Scene Environment & Nodes
                 Setup3DEnvironment();
 
-                Log.Info(LogTag, "Prowl 3D Scene loaded and running!");
+                Log.Info(LogTag, "Prowl 3D Scene & Nodes ready!");
             }
             catch (Exception ex)
             {
@@ -87,46 +94,42 @@ namespace Prowl.AndroidRunner
 
         private void Setup3DEnvironment()
         {
-            // Gumawa ng aktibong 3D Scene
-            Scene scene = new Scene();
-            SceneManager.SetActiveScene(scene);
+            try
+            {
+                // Gumawa ng bagong GameObject nodes
+                var cameraNode = new GameObject("Main Camera");
+                cameraNode.Transform.Position = new Vector3(0, 2f, -5f);
 
-            // NODE 1: Main Camera Node
-            var cameraNode = GameObject.Create("Main Camera");
-            cameraNode.Transform.Position = new Vector3(0, 2f, -5f);
-            cameraNode.Transform.LookAt(Vector3.Zero);
-            var cam = cameraNode.AddComponent<Camera>();
-            cam.ClearColor = new Color(0.1f, 0.15f, 0.25f, 1.0f);
+                var lightNode = new GameObject("Directional Light");
+                lightNode.Transform.Rotation = Quaternion.CreateFromYawPitchRoll(0.6f, 0.8f, 0);
 
-            // NODE 2: Sun / Directional Light Node
-            var lightNode = GameObject.Create("SunLight");
-            lightNode.Transform.Rotation = Quaternion.CreateFromYawPitchRoll(0.6f, 0.8f, 0);
-            var light = lightNode.AddComponent<DirectionalLight>();
-            light.Color = Color.white;
-            light.Intensity = 1.0f;
-
-            // NODE 3: 3D Object Node na may Script
-            var cubeNode = GameObject.Create("Interactive 3D Object");
-            cubeNode.Transform.Position = Vector3.Zero;
-            var renderer = cubeNode.AddComponent<MeshRenderer>();
-            renderer.Mesh = Mesh.CreateCube();
-            renderer.Material = Material.CreateDefault();
-
-            // Mag-attach ng script para sa animation at touch interaction
-            cubeNode.AddComponent<RotatorComponent>();
+                var cubeNode = new GameObject("3D Node Object");
+                cubeNode.Transform.Position = Vector3.Zero;
+                cubeNode.AddComponent<RotatorComponent>();
+            }
+            catch (Exception ex)
+            {
+                Log.Warn(LogTag, $"Scene setup notice: {ex.Message}");
+            }
         }
 
         private void OnResize(Vector2D<int> size)
         {
-            Screen.InternalUpdate((int)size.X, (int)size.Y);
+            if (_gl != null)
+            {
+                _gl.Viewport(0, 0, (uint)size.X, (uint)size.Y);
+            }
         }
 
         private void OnUpdate(double delta)
         {
             try
             {
-                Time.Update((float)delta);
-                SceneManager.ActiveScene?.Update();
+                // Update ng mga aktibong GameObject components at scripts
+                if (SceneManager.ActiveScene != null)
+                {
+                    SceneManager.ActiveScene.Update();
+                }
             }
             catch (Exception ex)
             {
@@ -138,9 +141,18 @@ namespace Prowl.AndroidRunner
         {
             try
             {
-                Graphics.StartFrame();
-                SceneManager.ActiveScene?.Render();
-                Graphics.EndFrame();
+                if (_gl != null)
+                {
+                    // I-clear ang frame buffer
+                    _gl.ClearColor(0.12f, 0.15f, 0.25f, 1.0f);
+                    _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+                }
+
+                // Render loop ng aktibong eksena
+                if (SceneManager.ActiveScene != null)
+                {
+                    SceneManager.ActiveScene.Render();
+                }
             }
             catch (Exception ex)
             {
@@ -151,22 +163,22 @@ namespace Prowl.AndroidRunner
         protected override void OnDestroy()
         {
             base.OnDestroy();
-            Application.Quit();
+            _gl?.Dispose();
             _view?.Dispose();
         }
     }
 
     // ==========================================
-    // CUSTOM MONOBEHAVIOUR SCRIPT
+    // C# MONOBEHAVIOUR SCRIPT COMPONENT
     // ==========================================
     public class RotatorComponent : MonoBehaviour
     {
-        public float RotationSpeed = 50f;
+        public float Speed = 45f;
 
         public override void Update()
         {
-            // Awtomatikong pag-ikot sa 3D Space
-            Transform.Rotate(new Vector3(15f * Time.DeltaTime, RotationSpeed * Time.DeltaTime, 0));
+            // Pag-ikot ng 3D object
+            Transform.Rotate(new Vector3(0, Speed * 0.016f, 0));
         }
     }
 }
