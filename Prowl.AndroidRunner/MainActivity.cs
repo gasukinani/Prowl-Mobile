@@ -4,6 +4,7 @@ using System.IO;
 using System.Numerics;
 using Android.App;
 using Android.Content.PM;
+using Android.Graphics;
 using Android.Graphics.Drawables;
 using Android.OS;
 using Android.Util;
@@ -49,24 +50,31 @@ namespace Prowl.AndroidRunner
         private PlayState _currentState = PlayState.EditMode;
         private readonly Scene _scene = new Scene();
         private ProwlNode? _selectedNode;
-        private ProwlNode? _cubeNode;
+        private readonly Dictionary<ProwlNode, (Vector3 pos, Vector3 rot, Vector3 scale)> _initialTransforms = new();
 
-        // --- Camera Navigation ---
-        private float _camYaw = 40.0f;
-        private float _camPitch = 22.0f;
+        // --- Camera Navigation via Virtual Joysticks ---
+        private float _camYaw = 45.0f;
+        private float _camPitch = 25.0f;
         private float _camDistance = 7.5f;
-        private Vector3 _camTarget = new Vector3(0, 0.6f, 0);
+        private Vector3 _camTarget = new Vector3(0, 0.5f, 0);
 
-        private float _touchLastX, _touchLastY;
-        private bool _isOrbiting = false;
+        // Joystick Input States
+        private Vector2 _moveJoyVector = Vector2.Zero;  // Left Stick (Move/Walk)
+        private Vector2 _lookJoyVector = Vector2.Zero;  // Right Stick (Lingon/Look)
+        private float _flyElevation = 0f;               // Up/Down Height
 
-        // --- Native UI Views ---
+        // --- Native UI Elements ---
         private Button? _btnPlay;
         private TextView? _txtFps;
+        private LinearLayout? _layoutHierarchyTree;
+        private LinearLayout? _layoutInspectorBody;
         private LinearLayout? _layoutConsoleLog;
         private LinearLayout? _layoutProjectGrid;
-        private TextView? _tabProject;
-        private TextView? _tabConsole;
+        private FrameLayout? _joystickOverlayContainer;
+        private LinearLayout? _rightPanel;
+        private LinearLayout? _botPanel;
+        private bool _isSidebarVisible = true;
+        private bool _isBottomDockVisible = true;
 
         private int _fps = 212;
         private float _fpsTimer = 0f;
@@ -78,8 +86,6 @@ namespace Prowl.AndroidRunner
             try { AssetExtractor.EnsureAssetsExtracted(this); } catch { }
 
             InitProwlScene();
-
-            // I-load ang Native Android Layout Overlay sa ibabaw ng Silk Viewport
             RunOnUiThread(BuildNativeProwlStudioLayout);
         }
 
@@ -91,15 +97,14 @@ namespace Prowl.AndroidRunner
             sunLight.Type = LightType.Directional;
             sun.Transform.Position = new Vector3(0, 4f, 0);
 
-            // 2. Active Cube (Prowl Default Object)
-            _cubeNode = _scene.CreateNode("Cube");
-            _cubeNode.Transform.Position = new Vector3(-0.79f, 0.5f, -0.13f);
-            var cubeMesh = _cubeNode.AddComponent<MeshRendererComponent>();
-            cubeMesh.Shape = MeshShape.Cube;
+            // 2. Default Active Cube
+            var cube = _scene.CreateNode("Cube");
+            cube.Transform.Position = new Vector3(-0.79f, 0.5f, -0.13f);
+            cube.AddComponent<MeshRendererComponent>().Shape = MeshShape.Cube;
 
             // 3. Low-Poly Trees
             var tree1 = _scene.CreateNode("Tree_1");
-            tree1.Transform.Position = new Vector3(2.2f, 0, 1.8f);
+            tree1.Transform.Position = new Vector3(2.5f, 0, 1.8f);
             tree1.AddComponent<MeshRendererComponent>().Shape = MeshShape.Tree;
 
             var tree2 = _scene.CreateNode("Tree_2");
@@ -111,7 +116,7 @@ namespace Prowl.AndroidRunner
             tree3.Transform.Scale = new Vector3(0.7f, 0.7f, 0.7f);
             tree3.AddComponent<MeshRendererComponent>().Shape = MeshShape.Tree;
 
-            _selectedNode = _cubeNode;
+            _selectedNode = cube;
             _scene.Start();
         }
 
@@ -143,7 +148,6 @@ namespace Prowl.AndroidRunner
         {
             if (_gl == null) return;
 
-            // 1. SKYBOX GRADIENT SHADER
             string skyVS = @"#version 300 es
             layout(location = 0) in vec2 aPos;
             out vec2 vUV;
@@ -166,7 +170,6 @@ namespace Prowl.AndroidRunner
             }";
             _skyProgram = CreateProgram(skyVS, skyFS);
 
-            // 2. LIT 3D WORLD SHADER (Standard Column-Major OpenGL ES)
             string litVS = @"#version 300 es
             layout(location = 0) in vec3 aPos;
             layout(location = 1) in vec3 aNorm;
@@ -202,7 +205,6 @@ namespace Prowl.AndroidRunner
                 vec3 ambient = vec3(0.35, 0.38, 0.44);
                 vec3 sunCol = vec3(1.0, 0.96, 0.88);
 
-                // Fake ground contact shadow
                 float shadow = 1.0;
                 if (vWorldPos.y <= 0.02) {
                     float dist = length(vWorldPos.xz - vec2(-0.79, -0.13));
@@ -239,7 +241,7 @@ namespace Prowl.AndroidRunner
         {
             if (_gl == null) return;
 
-            // 1. Sky Quad
+            // Sky
             float[] skyVerts = { -1, -1, 1, -1, 1, 1, 1, 1, -1, 1, -1, -1 };
             _vaoSky = _gl.GenVertexArray();
             _vboSky = _gl.GenBuffer();
@@ -251,9 +253,9 @@ namespace Prowl.AndroidRunner
             _gl.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, 2 * sizeof(float), (void*)0);
             _gl.EnableVertexAttribArray(0);
 
-            // 2. Prowl Checkered Floor na may Red at Yellow Crosshair Markers (+)
+            // Floor
             List<float> floorList = new List<float>();
-            int gridSize = 16;
+            int gridSize = 18;
             float step = 1.0f;
             float start = -gridSize * step * 0.5f;
 
@@ -268,10 +270,8 @@ namespace Prowl.AndroidRunner
 
                     bool isEven = ((x + z) % 2 == 0);
                     Vector3 tileCol = isEven ? new Vector3(0.85f, 0.86f, 0.89f) : new Vector3(0.35f, 0.38f, 0.44f);
-
                     AddFloorTile(floorList, x0, z0, x1, z1, tileCol);
 
-                    // Crosshair Marker (+)
                     if ((x + z) % 3 == 0)
                     {
                         Vector3 markerCol = (x % 2 == 0) ? new Vector3(0.95f, 0.25f, 0.25f) : new Vector3(0.95f, 0.85f, 0.20f);
@@ -285,12 +285,12 @@ namespace Prowl.AndroidRunner
             _floorVertCount = floorList.Count / 9;
             _vaoFloor = CreateVAO(floorList.ToArray());
 
-            // 3. Cube Mesh
+            // Cube
             List<float> cubeList = new List<float>();
             AddBoxVertices(cubeList, Vector3.Zero, new Vector3(1f, 1f, 1f), new Vector3(0.12f, 0.14f, 0.18f));
             _vaoCube = CreateVAO(cubeList.ToArray());
 
-            // 4. Low-Poly Trees
+            // Low-Poly Trees
             List<float> treeList = new List<float>();
             AddBoxVertices(treeList, new Vector3(0, 0.5f, 0), new Vector3(0.25f, 1.0f, 0.25f), new Vector3(0.55f, 0.35f, 0.20f));
             AddBoxVertices(treeList, new Vector3(0, 1.35f, 0), new Vector3(1.1f, 1.0f, 1.1f), new Vector3(0.22f, 0.85f, 0.28f));
@@ -298,23 +298,11 @@ namespace Prowl.AndroidRunner
             _treeVertCount = treeList.Count / 9;
             _vaoTree = CreateVAO(treeList.ToArray());
 
-            // 5. 3D XYZ Transform Gizmo (Red X, Green Y, Blue Z) + Lightbulb Icon
+            // 3D XYZ Transform Gizmo
             List<float> gizmoList = new List<float>();
-            // X Axis
             gizmoList.AddRange(new[] { 0f, 0.5f, 0f, 0f, 1f, 0f, 0.95f, 0.25f, 0.25f,  1.3f, 0.5f, 0f, 0f, 1f, 0f, 0.95f, 0.25f, 0.25f });
-            // Y Axis
             gizmoList.AddRange(new[] { 0f, 0.5f, 0f, 0f, 1f, 0f, 0.25f, 0.95f, 0.25f,  0f, 1.8f, 0f, 0f, 1f, 0f, 0.25f, 0.95f, 0.25f });
-            // Z Axis
             gizmoList.AddRange(new[] { 0f, 0.5f, 0f, 0f, 1f, 0f, 0.25f, 0.55f, 0.95f,  0f, 0.5f, 1.3f, 0f, 1f, 0f, 0.25f, 0.55f, 0.95f });
-            // Lightbulb Ring Icon
-            float r = 0.35f;
-            for (int i = 0; i < 16; i++)
-            {
-                float a1 = (i / 16f) * MathF.PI * 2f;
-                float a2 = ((i + 1) / 16f) * MathF.PI * 2f;
-                gizmoList.AddRange(new[] { MathF.Cos(a1)*r, 3.8f + MathF.Sin(a1)*r, 0f, 0f, 1f, 0f, 1.0f, 0.95f, 0.2f,
-                                           MathF.Cos(a2)*r, 3.8f + MathF.Sin(a2)*r, 0f, 0f, 1f, 0f, 1.0f, 0.95f, 0.2f });
-            }
             _gizmoVertCount = gizmoList.Count / 9;
             _vaoGizmo = CreateVAO(gizmoList.ToArray());
         }
@@ -336,22 +324,21 @@ namespace Prowl.AndroidRunner
         {
             float x = s.X * 0.5f, y = s.Y * 0.5f, z = s.Z * 0.5f;
             float[] r = {
-                // Front
                 c.X-x, c.Y-y, c.Z+z,  0,0,1,  col.X,col.Y,col.Z,  c.X+x, c.Y-y, c.Z+z,  0,0,1,  col.X,col.Y,col.Z,  c.X+x, c.Y+y, c.Z+z,  0,0,1,  col.X,col.Y,col.Z,
                 c.X+x, c.Y+y, c.Z+z,  0,0,1,  col.X,col.Y,col.Z,  c.X-x, c.Y+y, c.Z+z,  0,0,1,  col.X,col.Y,col.Z,  c.X-x, c.Y-y, c.Z+z,  0,0,1,  col.X,col.Y,col.Z,
-                // Back
+
                 c.X-x, c.Y-y, c.Z-z,  0,0,-1, col.X*0.7f,col.Y*0.7f,col.Z*0.7f,  c.X-x, c.Y+y, c.Z-z,  0,0,-1, col.X*0.7f,col.Y*0.7f,col.Z*0.7f,  c.X+x, c.Y+y, c.Z-z,  0,0,-1, col.X*0.7f,col.Y*0.7f,col.Z*0.7f,
                 c.X+x, c.Y+y, c.Z-z,  0,0,-1, col.X*0.7f,col.Y*0.7f,col.Z*0.7f,  c.X+x, c.Y-y, c.Z-z,  0,0,-1, col.X*0.7f,col.Y*0.7f,col.Z*0.7f,  c.X-x, c.Y-y, c.Z-z,  0,0,-1, col.X*0.7f,col.Y*0.7f,col.Z*0.7f,
-                // Top
+
                 c.X-x, c.Y+y, c.Z-z,  0,1,0,  col.X*1.2f,col.Y*1.2f,col.Z*1.2f,  c.X-x, c.Y+y, c.Z+z,  0,1,0,  col.X*1.2f,col.Y*1.2f,col.Z*1.2f,  c.X+x, c.Y+y, c.Z+z,  0,1,0,  col.X*1.2f,col.Y*1.2f,col.Z*1.2f,
                 c.X+x, c.Y+y, c.Z+z,  0,1,0,  col.X*1.2f,col.Y*1.2f,col.Z*1.2f,  c.X+x, c.Y+y, c.Z-z,  0,1,0,  col.X*1.2f,col.Y*1.2f,col.Z*1.2f,  c.X-x, c.Y+y, c.Z-z,  0,1,0,  col.X*1.2f,col.Y*1.2f,col.Z*1.2f,
-                // Bottom
+
                 c.X-x, c.Y-y, c.Z-z,  0,-1,0, col.X*0.5f,col.Y*0.5f,col.Z*0.5f,  c.X+x, c.Y-y, c.Z-z,  0,-1,0, col.X*0.5f,col.Y*0.5f,col.Z*0.5f,  c.X+x, c.Y-y, c.Z+z,  0,-1,0, col.X*0.5f,col.Y*0.5f,col.Z*0.5f,
                 c.X+x, c.Y-y, c.Z+z,  0,-1,0, col.X*0.5f,col.Y*0.5f,col.Z*0.5f,  c.X-x, c.Y-y, c.Z+z,  0,-1,0, col.X*0.5f,col.Y*0.5f,col.Z*0.5f,  c.X-x, c.Y-y, c.Z-z,  0,-1,0, col.X*0.5f,col.Y*0.5f,col.Z*0.5f,
-                // Left
+
                 c.X-x, c.Y-y, c.Z-z, -1,0,0,  col.X*0.8f,col.Y*0.8f,col.Z*0.8f,  c.X-x, c.Y-y, c.Z+z, -1,0,0,  col.X*0.8f,col.Y*0.8f,col.Z*0.8f,  c.X-x, c.Y+y, c.Z+z, -1,0,0,  col.X*0.8f,col.Y*0.8f,col.Z*0.8f,
-                c.X-x, c.Y+y, c.Z+z, -1,0,0,  col.X*0.8f,col.Y*0.8f,col.Z*0.8f,  c.X-x, c.Y+y, c.Z-z, -1,0,0,  col.X*0.8f,col.Y*0.8f,col.Z*0.8f,  c.X-x, c.Y-y, c.Z-z, -1,0,0,  col.X*0.8f,col.Y*0.8f,col.Z*0.8f,
-                // Right
+                c.X-x, c.Y+y, c.Z+z, -1,0,0,  col.X*0.8f,col.Y*0.8f,col.Z*0.8f,  c.X-x, c.Y-y, c.Z-z, -1,0,0,  col.X*0.8f,col.Y*0.8f,col.Z*0.8f,  c.X-x, c.Y+y, c.Z-z, -1,0,0,  col.X*0.8f,col.Y*0.8f,col.Z*0.8f,
+
                 c.X+x, c.Y-y, c.Z-z,  1,0,0,  col.X*0.9f,col.Y*0.9f,col.Z*0.9f,  c.X+x, c.Y+y, c.Z-z,  1,0,0,  col.X*0.9f,col.Y*0.9f,col.Z*0.9f,  c.X+x, c.Y+y, c.Z+z,  1,0,0,  col.X*0.9f,col.Y*0.9f,col.Z*0.9f,
                 c.X+x, c.Y+y, c.Z+z,  1,0,0,  col.X*0.9f,col.Y*0.9f,col.Z*0.9f,  c.X+x, c.Y-y, c.Z+z,  1,0,0,  col.X*0.9f,col.Y*0.9f,col.Z*0.9f,  c.X+x, c.Y-y, c.Z-z,  1,0,0,  col.X*0.9f,col.Y*0.9f,col.Z*0.9f,
             };
@@ -393,11 +380,48 @@ namespace Prowl.AndroidRunner
                 _frames = 0;
                 _fpsTimer = 0f;
                 RunOnUiThread(() => {
-                    if (_txtFps != null) _txtFps.Text = $"🟢 {_fps} FPS";
+                    if (_txtFps != null) _txtFps.Text = $"🟢 {_fps} FPS 4.7ms";
                 });
             }
 
-            _scene.Update(dt, Vector2.Zero, _currentState == PlayState.PlayMode);
+            // =========================================================
+            // VIRTUAL JOYSTICK CAMERA NAVIGATION (MOVE & LINGON)
+            // =========================================================
+            float moveSpeed = 6.0f;
+            float lookSpeed = 65.0f;
+
+            // 1. Right Joystick: Lingon / Look (Yaw & Pitch)
+            if (_lookJoyVector != Vector2.Zero)
+            {
+                _camYaw += _lookJoyVector.X * lookSpeed * dt;
+                _camPitch = Math.Clamp(_camPitch - _lookJoyVector.Y * lookSpeed * dt, -80.0f, 85.0f);
+            }
+
+            // 2. Left Joystick: Lakad / Move (Forward, Backward, Strafe)
+            if (_moveJoyVector != Vector2.Zero)
+            {
+                float radY = _camYaw * MathF.PI / 180f;
+                Vector3 forward = new Vector3(MathF.Sin(radY), 0, MathF.Cos(radY));
+                Vector3 right = new Vector3(MathF.Cos(radY), 0, -MathF.Sin(radY));
+
+                Vector3 moveDir = (forward * _moveJoyVector.Y) + (right * _moveJoyVector.X);
+                _camTarget += moveDir * moveSpeed * dt;
+            }
+
+            // 3. Elevation Height (Fly Up / Down)
+            if (_flyElevation != 0f)
+            {
+                _camTarget.Y += _flyElevation * moveSpeed * dt;
+            }
+
+            // Animate Selected Node in PlayMode
+            if (_currentState == PlayState.PlayMode && _selectedNode != null)
+            {
+                var cur = _selectedNode.Transform.Rotation;
+                _selectedNode.Transform.Rotation = new Vector3(cur.X, cur.Y + dt * 50.0f, cur.Z);
+            }
+
+            _scene.Update(dt, _moveJoyVector, _currentState == PlayState.PlayMode);
         }
 
         private unsafe void OnRender(double delta)
@@ -409,14 +433,14 @@ namespace Prowl.AndroidRunner
             _gl.Viewport(0, 0, (uint)w, (uint)h);
             _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
-            // 1. SKYBOX PASS (DepthMask = false para hindi masira ang depth buffer!)
+            // Sky
             _gl.Disable(EnableCap.DepthTest);
             _gl.DepthMask(false);
             _gl.UseProgram(_skyProgram);
             _gl.BindVertexArray(_vaoSky);
             _gl.DrawArrays(PrimitiveType.Triangles, 0, 6);
 
-            // 2. 3D WORLD PASS
+            // 3D Scene
             _gl.Enable(EnableCap.DepthTest);
             _gl.DepthMask(true);
             _gl.DepthFunc(DepthFunction.Less);
@@ -426,7 +450,7 @@ namespace Prowl.AndroidRunner
             float aspect = (float)w / Math.Max(1, h);
             var proj = Matrix4x4.CreatePerspectiveFieldOfView(MathF.PI / 3.4f, aspect, 0.1f, 100.0f);
 
-            // Camera Orbit
+            // Dynamic Camera Eye Position based on Target, Distance, Yaw & Pitch
             float radY = _camYaw * MathF.PI / 180f;
             float radP = _camPitch * MathF.PI / 180f;
             float camX = _camTarget.X + _camDistance * MathF.Cos(radP) * MathF.Sin(radY);
@@ -434,7 +458,6 @@ namespace Prowl.AndroidRunner
             float camZ = _camTarget.Z + _camDistance * MathF.Cos(radP) * MathF.Cos(radY);
             var view = Matrix4x4.CreateLookAt(new Vector3(camX, camY, camZ), _camTarget, Vector3.UnitY);
 
-            // Transpose bago i-upload sa OpenGL ES (Row-Major to Column-Major)
             var projT = Matrix4x4.Transpose(proj);
             var viewT = Matrix4x4.Transpose(view);
 
@@ -445,13 +468,13 @@ namespace Prowl.AndroidRunner
             _gl.UniformMatrix4(locProj, 1, false, (float*)&projT);
             _gl.UniformMatrix4(locView, 1, false, (float*)&viewT);
 
-            // Draw Checkered Floor
+            // Floor
             var floorMat = Matrix4x4.Transpose(Matrix4x4.Identity);
             _gl.UniformMatrix4(locModel, 1, false, (float*)&floorMat);
             _gl.BindVertexArray(_vaoFloor);
             _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_floorVertCount);
 
-            // Draw Entities
+            // Objects
             foreach (var node in _scene.Nodes)
             {
                 var mesh = node.GetComponent<MeshRendererComponent>();
@@ -472,7 +495,7 @@ namespace Prowl.AndroidRunner
                 }
             }
 
-            // Draw 3D XYZ Transform Gizmo
+            // Gizmo
             if (_selectedNode != null && _currentState == PlayState.EditMode)
             {
                 _gl.Disable(EnableCap.DepthTest);
@@ -484,7 +507,7 @@ namespace Prowl.AndroidRunner
         }
 
         // =========================================================================
-        // NATIVE PROWL ENGINE STUDIO DOCKED UI LAYOUT (EXACT SCREENSHOT 2 MATCH)
+        // REAL PROWL STUDIO DARK DOCKED UI (MATCHING SCREENSHOT 2 EXACTLY)
         // =========================================================================
         private void BuildNativeProwlStudioLayout()
         {
@@ -498,41 +521,41 @@ namespace Prowl.AndroidRunner
             };
             topBar.SetBackgroundColor(Color.ParseColor("#14171e"));
 
-            // Menu Items
-            string[] menus = { "File", "Edit", "Assets", "GameObject", "Window" };
-            foreach (var m in menus)
-            {
-                var tv = new TextView(this) { Text = m, TextSize = 12 };
-                tv.SetTextColor(Color.ParseColor("#b5bac8"));
-                tv.SetPadding(DpToPx(10), DpToPx(8), DpToPx(10), DpToPx(8));
-                topBar.AddView(tv);
-            }
+            // Menus
+            AddHeaderMenu(topBar, "File", new[] { "New Scene", "Open Scene...", "Save Scene", "Save Scene As...", "Build Settings..." });
+            AddHeaderMenu(topBar, "Edit", new[] { "Undo", "Redo", "Cut", "Copy", "Paste", "Project Settings" });
+            AddHeaderMenu(topBar, "Assets", new[] { "Create C# Script", "Create Material", "Create Shader", "Import Asset..." });
+            AddHeaderMenu(topBar, "GameObject", new[] { "3D Object -> Cube", "3D Object -> Low-Poly Tree", "Light -> Directional Light", "Create Empty", "Delete Selected" });
+            AddHeaderMenu(topBar, "Window", new[] { "Toggle Sidebar Panel", "Toggle Bottom Dock", "Reset Editor Camera", "Clear Console Logs" });
 
             // Space
-            var spacer1 = new View(this) { LayoutParameters = new LinearLayout.LayoutParams(0, 1, 1f) };
-            topBar.AddView(spacer1);
+            topBar.AddView(new View(this) { LayoutParameters = new LinearLayout.LayoutParams(0, 1, 1f) });
 
-            // Play / Pause Controls
-            _btnPlay = new Button(this) { Text = "▶ Play", TextSize = 11 };
+            // Play / Pause / Step Controls (Center)
+            _btnPlay = new Button(this) { Text = "▶", TextSize = 13 };
             _btnPlay.SetTextColor(Color.White);
             _btnPlay.SetBackgroundColor(Color.ParseColor("#202530"));
-            _btnPlay.LayoutParameters = new LinearLayout.LayoutParams(DpToPx(75), DpToPx(28)) { Gravity = GravityFlags.CenterVertical };
-            _btnPlay.Click += (s, e) => {
-                _currentState = (_currentState == PlayState.EditMode) ? PlayState.PlayMode : PlayState.EditMode;
-                _btnPlay.Text = (_currentState == PlayState.PlayMode) ? "⏹ Stop" : "▶ Play";
-                _btnPlay.SetTextColor((_currentState == PlayState.PlayMode) ? Color.ParseColor("#2ecc71") : Color.White);
-            };
+            _btnPlay.LayoutParameters = new LinearLayout.LayoutParams(DpToPx(44), DpToPx(30)) { Gravity = GravityFlags.CenterVertical };
+            _btnPlay.Click += (s, e) => TogglePlayMode();
             topBar.AddView(_btnPlay);
 
-            var spacer2 = new View(this) { LayoutParameters = new LinearLayout.LayoutParams(0, 1, 1f) };
-            topBar.AddView(spacer2);
+            var btnPause = new Button(this) { Text = "⏸", TextSize = 12 };
+            btnPause.SetTextColor(Color.ParseColor("#858b98"));
+            btnPause.SetBackgroundColor(Color.ParseColor("#1a1e28"));
+            var lpPause = new LinearLayout.LayoutParams(DpToPx(38), DpToPx(30)) { Gravity = GravityFlags.CenterVertical, LeftMargin = DpToPx(3) };
+            btnPause.LayoutParameters = lpPause;
+            btnPause.Click += (s, e) => Toast.MakeText(this, "Game Paused", ToastLength.Short)?.Show();
+            topBar.AddView(btnPause);
 
-            _txtFps = new TextView(this) { Text = "🟢 212 FPS", TextSize = 11 };
+            topBar.AddView(new View(this) { LayoutParameters = new LinearLayout.LayoutParams(0, 1, 1f) });
+
+            // FPS & Engine Badges
+            _txtFps = new TextView(this) { Text = "🟢 212 FPS 4.7ms", TextSize = 11 };
             _txtFps.SetTextColor(Color.ParseColor("#2ecc71"));
             _txtFps.SetPadding(DpToPx(6), DpToPx(8), DpToPx(6), DpToPx(8));
             topBar.AddView(_txtFps);
 
-            var txtVer = new TextView(this) { Text = "v1.0-preview | MyGame5", TextSize = 11 };
+            var txtVer = new TextView(this) { Text = "v1.0-preview | MyGame5 ⚙", TextSize = 11 };
             txtVer.SetTextColor(Color.ParseColor("#858b98"));
             txtVer.SetPadding(DpToPx(6), DpToPx(8), DpToPx(12), DpToPx(8));
             topBar.AddView(txtVer);
@@ -549,161 +572,511 @@ namespace Prowl.AndroidRunner
                     LeftMargin = DpToPx(10)
                 }
             };
-            var tabScene = CreateTabButton("❖ Scene", true);
-            var tabGame = CreateTabButton("🎮 Game", false);
-            var tabPrefs = CreateTabButton("⚙ Preferences", false);
-            vpTabs.AddView(tabScene);
-            vpTabs.AddView(tabGame);
-            vpTabs.AddView(tabPrefs);
+            vpTabs.AddView(CreateTabButton("❖ Scene", true));
+            vpTabs.AddView(CreateTabButton("🎮 Game", false));
+            vpTabs.AddView(CreateTabButton("⚙ Preferences", false));
             root.AddView(vpTabs);
 
-            // 3. RIGHT SIDEBAR: HIERARCHY & INSPECTOR
+            // 3. VIEWPORT LEFT FLOATING TOOLBAR (Move, Rotate, Scale)
+            var leftToolbar = new LinearLayout(this)
+            {
+                Orientation = Orientation.Vertical,
+                LayoutParameters = new FrameLayout.LayoutParams(DpToPx(32), ViewGroup.LayoutParams.WrapContent)
+                {
+                    TopMargin = DpToPx(80),
+                    LeftMargin = DpToPx(10)
+                }
+            };
+            leftToolbar.SetBackgroundColor(Color.ParseColor("#c0181b25"));
+            leftToolbar.AddView(CreateToolIcon("✥", "Move Tool"));
+            leftToolbar.AddView(CreateToolIcon("↻", "Rotate Tool"));
+            leftToolbar.AddView(CreateToolIcon("⤢", "Scale Tool"));
+            leftToolbar.AddView(CreateToolIcon("⊡", "Bounds Tool"));
+            root.AddView(leftToolbar);
+
+            // 4. RIGHT SIDEBAR: HIERARCHY & INSPECTOR DOCKS
             int rightW = DpToPx(260);
-            var rightPanel = new LinearLayout(this)
+            _rightPanel = new LinearLayout(this)
             {
                 Orientation = Orientation.Vertical,
                 LayoutParameters = new FrameLayout.LayoutParams(rightW, ViewGroup.LayoutParams.MatchParent)
                 {
                     Gravity = GravityFlags.Right,
-                    TopMargin = DpToPx(38)
+                    TopMargin = DpToPx(38),
+                    BottomMargin = DpToPx(22) // Leave room for status bar
                 }
             };
-            rightPanel.SetBackgroundColor(Color.ParseColor("#161922"));
+            _rightPanel.SetBackgroundColor(Color.ParseColor("#161922"));
 
-            // --- Hierarchy ---
-            var hHeader = CreateHeaderBar("Hierarchy");
-            rightPanel.AddView(hHeader);
+            // --- Hierarchy Dock ---
+            var hHeader = CreateHeaderBar("Hierarchy ✕");
+            _rightPanel.AddView(hHeader);
 
-            var hTree = new LinearLayout(this) { Orientation = Orientation.Vertical };
-            hTree.AddView(CreateTreeItem("📁 Untitled Scene", false));
-            hTree.AddView(CreateTreeItem("  📷 Main Camera", false));
-            hTree.AddView(CreateTreeItem("  💡 Directional Light", false));
-            hTree.AddView(CreateTreeItem("  ▦ Floor", false));
-            hTree.AddView(CreateTreeItem("  📦 Cube", true)); // Selected Active
-            rightPanel.AddView(hTree);
+            var hSearch = new EditText(this) { Hint = "🔍 Search...", TextSize = 10 };
+            hSearch.SetTextColor(Color.White);
+            hSearch.SetHintTextColor(Color.ParseColor("#636b7c"));
+            hSearch.SetBackgroundColor(Color.ParseColor("#1b1f2b"));
+            hSearch.SetPadding(DpToPx(8), DpToPx(4), DpToPx(8), DpToPx(4));
+            _rightPanel.AddView(hSearch);
 
-            // Divider
+            var scrollHierarchy = new ScrollView(this) { LayoutParameters = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, DpToPx(140)) };
+            _layoutHierarchyTree = new LinearLayout(this) { Orientation = Orientation.Vertical };
+            scrollHierarchy.AddView(_layoutHierarchyTree);
+            _rightPanel.AddView(scrollHierarchy);
+
             var div = new View(this) { LayoutParameters = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, DpToPx(1)) };
             div.SetBackgroundColor(Color.ParseColor("#222734"));
-            rightPanel.AddView(div);
+            _rightPanel.AddView(div);
 
-            // --- Inspector ---
-            var iHeader = CreateHeaderBar("Inspector");
-            rightPanel.AddView(iHeader);
+            // --- Inspector Dock ---
+            var iHeader = CreateHeaderBar("Inspector ✕");
+            _rightPanel.AddView(iHeader);
 
-            var inspBody = new LinearLayout(this) { Orientation = Orientation.Vertical };
-            inspBody.SetPadding(DpToPx(10), DpToPx(4), DpToPx(10), DpToPx(4));
+            var scrollInsp = new ScrollView(this) { LayoutParameters = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent) };
+            _layoutInspectorBody = new LinearLayout(this) { Orientation = Orientation.Vertical };
+            _layoutInspectorBody.SetPadding(DpToPx(10), DpToPx(4), DpToPx(10), DpToPx(6));
+            scrollInsp.AddView(_layoutInspectorBody);
+            _rightPanel.AddView(scrollInsp);
 
-            var nodeTitle = new TextView(this) { Text = "☑ Cube               [Dynamic ▼]", TextSize = 12 };
+            root.AddView(_rightPanel);
+
+            // 5. BOTTOM DOCK: PROJECT & CONSOLE PANELS (SPLIT LAYOUT)
+            int botH = DpToPx(140);
+            _botPanel = new LinearLayout(this)
+            {
+                Orientation = Orientation.Horizontal,
+                LayoutParameters = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, botH)
+                {
+                    Gravity = GravityFlags.Bottom,
+                    RightMargin = rightW,
+                    BottomMargin = DpToPx(22) // Above status bar
+                }
+            };
+            _botPanel.SetBackgroundColor(Color.ParseColor("#14161f"));
+
+            // Project Dock (Left Split)
+            var projectPanel = new LinearLayout(this)
+            {
+                Orientation = Orientation.Vertical,
+                LayoutParameters = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MatchParent, 1f)
+            };
+            var projHeader = CreateHeaderBar("📁 Project ✕  |  Assets >");
+            projectPanel.AddView(projHeader);
+
+            var projScroll = new HorizontalScrollView(this) { LayoutParameters = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent) };
+            _layoutProjectGrid = new LinearLayout(this) { Orientation = Orientation.Horizontal };
+            _layoutProjectGrid.SetPadding(DpToPx(8), DpToPx(6), DpToPx(8), DpToPx(6));
+
+            string[] assets = { "📁 textures", "📁 lightmaps", "📁 Scripts", "📄 Player.cs", "🎨 Material", "🗿 banana_man" };
+            foreach (var a in assets)
+            {
+                var card = new TextView(this) { Text = a, TextSize = 10 };
+                card.SetTextColor(Color.White);
+                card.SetBackgroundColor(Color.ParseColor("#1c202c"));
+                card.SetPadding(DpToPx(8), DpToPx(12), DpToPx(8), DpToPx(12));
+                var lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = DpToPx(6) };
+                card.LayoutParameters = lp;
+                card.Click += (s, e) => Toast.MakeText(this, $"Opened Asset: {a}", ToastLength.Short)?.Show();
+                _layoutProjectGrid.AddView(card);
+            }
+            projScroll.AddView(_layoutProjectGrid);
+            projectPanel.AddView(projScroll);
+            _botPanel.AddView(projectPanel);
+
+            // Vertical Splitter
+            var splitDiv = new View(this) { LayoutParameters = new LinearLayout.LayoutParams(DpToPx(1), ViewGroup.LayoutParams.MatchParent) };
+            splitDiv.SetBackgroundColor(Color.ParseColor("#252a38"));
+            _botPanel.AddView(splitDiv);
+
+            // Console Dock (Right Split)
+            var consolePanel = new LinearLayout(this)
+            {
+                Orientation = Orientation.Vertical,
+                LayoutParameters = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MatchParent, 1.2f)
+            };
+            var conHeader = CreateHeaderBar("📟 Console ✕  (ℹ 69  ⚠ 2  🔴 1)");
+            consolePanel.AddView(conHeader);
+
+            var conScroll = new ScrollView(this) { LayoutParameters = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent) };
+            _layoutConsoleLog = new LinearLayout(this) { Orientation = Orientation.Vertical };
+            _layoutConsoleLog.SetPadding(DpToPx(8), DpToPx(4), DpToPx(8), DpToPx(4));
+
+            AddConsoleLog("ℹ info: VAO: [ID 0] Mesh uploaded successfully to VRAM (GPU)");
+            AddConsoleLog("ℹ info: Compiling shader pass Standard with Keywords: LIGHT_ON");
+            AddConsoleLog("ℹ info: Compiling shader pass Gizmos with [CommandBuffer]");
+            AddConsoleLog("⚠ warning: Texture 'Cobble_Normal' 2048x2048 using default compression");
+
+            conScroll.AddView(_layoutConsoleLog);
+            consolePanel.AddView(conScroll);
+            _botPanel.AddView(consolePanel);
+
+            root.AddView(_botPanel);
+
+            // 6. BOTTOM ENGINE STATUS BAR
+            var statusBar = new LinearLayout(this)
+            {
+                Orientation = Orientation.Horizontal,
+                LayoutParameters = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, DpToPx(22)) { Gravity = GravityFlags.Bottom }
+            };
+            statusBar.SetBackgroundColor(Color.ParseColor("#0e1017"));
+
+            var txtStatus = new TextView(this) { Text = " ℹ VAO: [ID 0] Mesh uploaded to GPU | Untitled Scene | 💾 38 MB | OpenGL ES 3.0", TextSize = 10 };
+            txtStatus.SetTextColor(Color.ParseColor("#858b98"));
+            txtStatus.SetPadding(DpToPx(6), DpToPx(2), DpToPx(6), DpToPx(2));
+            statusBar.AddView(txtStatus);
+            root.AddView(statusBar);
+
+            // =====================================================================
+            // 7. DUAL VIRTUAL JOYSTICK OVERLAY (MOVE / LAKAD & LOOK / LINGON)
+            // =====================================================================
+            _joystickOverlayContainer = new FrameLayout(this)
+            {
+                LayoutParameters = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent)
+            };
+
+            // LEFT VIRTUAL JOYSTICK (Walk / Move)
+            var leftStick = new VirtualJoystickView(this, (vec) => _moveJoyVector = vec);
+            var lpLeft = new FrameLayout.LayoutParams(DpToPx(130), DpToPx(130))
+            {
+                Gravity = GravityFlags.Bottom | GravityFlags.Left,
+                LeftMargin = DpToPx(14),
+                BottomMargin = DpToPx(148) // Above bottom dock
+            };
+            leftStick.LayoutParameters = lpLeft;
+            _joystickOverlayContainer.AddView(leftStick);
+
+            var lblMove = new TextView(this) { Text = "MOVE / LAKAD", TextSize = 9 };
+            lblMove.SetTextColor(Color.ParseColor("#80ffffff"));
+            var lpLblMove = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent)
+            {
+                Gravity = GravityFlags.Bottom | GravityFlags.Left,
+                LeftMargin = DpToPx(42),
+                BottomMargin = DpToPx(140)
+            };
+            lblMove.LayoutParameters = lpLblMove;
+            _joystickOverlayContainer.AddView(lblMove);
+
+            // RIGHT VIRTUAL JOYSTICK (Look / Lingon)
+            var rightStick = new VirtualJoystickView(this, (vec) => _lookJoyVector = vec);
+            var lpRight = new FrameLayout.LayoutParams(DpToPx(130), DpToPx(130))
+            {
+                Gravity = GravityFlags.Bottom | GravityFlags.Right,
+                RightMargin = rightW + DpToPx(14),
+                BottomMargin = DpToPx(148)
+            };
+            rightStick.LayoutParameters = lpRight;
+            _joystickOverlayContainer.AddView(rightStick);
+
+            var lblLook = new TextView(this) { Text = "LOOK / LINGON", TextSize = 9 };
+            lblLook.SetTextColor(Color.ParseColor("#80ffffff"));
+            var lpLblLook = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent)
+            {
+                Gravity = GravityFlags.Bottom | GravityFlags.Right,
+                RightMargin = rightW + DpToPx(42),
+                BottomMargin = DpToPx(140)
+            };
+            lblLook.LayoutParameters = lpLblLook;
+            _joystickOverlayContainer.AddView(lblLook);
+
+            // FLY UP / DOWN ELEVATION BUTTONS
+            var elevPanel = new LinearLayout(this)
+            {
+                Orientation = Orientation.Vertical,
+                LayoutParameters = new FrameLayout.LayoutParams(DpToPx(38), DpToPx(85))
+                {
+                    Gravity = GravityFlags.Bottom | GravityFlags.Left,
+                    LeftMargin = DpToPx(150),
+                    BottomMargin = DpToPx(160)
+                }
+            };
+
+            var btnUp = new Button(this) { Text = "▲", TextSize = 11 };
+            btnUp.SetTextColor(Color.White);
+            btnUp.SetBackgroundColor(Color.ParseColor("#80252b3a"));
+            btnUp.Touch += (s, e) => {
+                if (e.Event?.Action == MotionEventActions.Down) _flyElevation = 1.0f;
+                else if (e.Event?.Action == MotionEventActions.Up || e.Event?.Action == MotionEventActions.Cancel) _flyElevation = 0f;
+            };
+            elevPanel.AddView(btnUp);
+
+            var btnDown = new Button(this) { Text = "▼", TextSize = 11 };
+            btnDown.SetTextColor(Color.White);
+            btnDown.SetBackgroundColor(Color.ParseColor("#80252b3a"));
+            btnDown.Touch += (s, e) => {
+                if (e.Event?.Action == MotionEventActions.Down) _flyElevation = -1.0f;
+                else if (e.Event?.Action == MotionEventActions.Up || e.Event?.Action == MotionEventActions.Cancel) _flyElevation = 0f;
+            };
+            elevPanel.AddView(btnDown);
+
+            _joystickOverlayContainer.AddView(elevPanel);
+
+            root.AddView(_joystickOverlayContainer);
+
+            // Attach Direct to Android Content
+            AddContentView(root, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
+
+            RefreshHierarchyUI();
+            RefreshInspectorUI();
+        }
+
+        // =========================================================================
+        // UI HELPERS & DYNAMIC HANDLERS
+        // =========================================================================
+        private void AddHeaderMenu(LinearLayout container, string menuTitle, string[] items)
+        {
+            var btn = new TextView(this) { Text = menuTitle, TextSize = 12 };
+            btn.SetTextColor(Color.ParseColor("#b5bac8"));
+            btn.SetPadding(DpToPx(10), DpToPx(8), DpToPx(10), DpToPx(8));
+            btn.Click += (s, e) => {
+                var popup = new PopupMenu(this, btn);
+                for (int i = 0; i < items.Length; i++) popup.Menu.Add(0, i, i, items[i]);
+                popup.MenuItemClick += (sender, args) => HandleMenuAction(args.Item?.TitleFormatted?.ToString() ?? "");
+                popup.Show();
+            };
+            container.AddView(btn);
+        }
+
+        private void HandleMenuAction(string action)
+        {
+            if (action.Contains("Cube"))
+            {
+                var c = _scene.CreateNode("Cube_" + (_scene.Nodes.Count + 1));
+                c.Transform.Position = _camTarget + new Vector3(0, 0.5f, 0);
+                c.AddComponent<MeshRendererComponent>().Shape = MeshShape.Cube;
+                SelectNode(c);
+                AddConsoleLog($"ℹ Created GameObject '{c.Name}'");
+            }
+            else if (action.Contains("Tree"))
+            {
+                var t = _scene.CreateNode("Tree_" + (_scene.Nodes.Count + 1));
+                t.Transform.Position = _camTarget;
+                t.AddComponent<MeshRendererComponent>().Shape = MeshShape.Tree;
+                SelectNode(t);
+                AddConsoleLog($"ℹ Created GameObject '{t.Name}'");
+            }
+            else if (action.Contains("Delete"))
+            {
+                if (_selectedNode != null)
+                {
+                    AddConsoleLog($"⚠ Deleted GameObject '{_selectedNode.Name}'");
+                    _scene.Nodes.Remove(_selectedNode);
+                    _selectedNode = _scene.Nodes.Count > 0 ? _scene.Nodes[0] : null;
+                    RefreshHierarchyUI();
+                    RefreshInspectorUI();
+                }
+            }
+            else if (action.Contains("Toggle Sidebar"))
+            {
+                _isSidebarVisible = !_isSidebarVisible;
+                if (_rightPanel != null) _rightPanel.Visibility = _isSidebarVisible ? ViewStates.Visible : ViewStates.Gone;
+            }
+            else if (action.Contains("Toggle Bottom"))
+            {
+                _isBottomDockVisible = !_isBottomDockVisible;
+                if (_botPanel != null) _botPanel.Visibility = _isBottomDockVisible ? ViewStates.Visible : ViewStates.Gone;
+            }
+            else if (action.Contains("Reset Editor Camera"))
+            {
+                _camYaw = 45.0f;
+                _camPitch = 25.0f;
+                _camDistance = 7.5f;
+                _camTarget = new Vector3(0, 0.5f, 0);
+                AddConsoleLog("ℹ Camera reset to default coordinates.");
+            }
+            else if (action.Contains("Clear Console"))
+            {
+                _layoutConsoleLog?.RemoveAllViews();
+            }
+            else
+            {
+                Toast.MakeText(this, $"Action: {action}", ToastLength.Short)?.Show();
+            }
+        }
+
+        private void SelectNode(ProwlNode? node)
+        {
+            _selectedNode = node;
+            RefreshHierarchyUI();
+            RefreshInspectorUI();
+        }
+
+        public void RefreshHierarchyUI()
+        {
+            if (_layoutHierarchyTree == null) return;
+            _layoutHierarchyTree.RemoveAllViews();
+
+            var sceneRoot = CreateTreeItem("📁 Untitled Scene", false);
+            _layoutHierarchyTree.AddView(sceneRoot);
+
+            foreach (var node in _scene.Nodes)
+            {
+                bool isSel = (_selectedNode == node);
+                string icon = node.GetComponent<LightComponent>() != null ? "💡 " : (node.GetComponent<MeshRendererComponent>()?.Shape == MeshShape.Tree ? "🌲 " : "📦 ");
+                var item = CreateTreeItem($"  {icon}{node.Name}", isSel);
+                item.Click += (s, e) => SelectNode(node);
+                _layoutHierarchyTree.AddView(item);
+            }
+        }
+
+        public void RefreshInspectorUI()
+        {
+            if (_layoutInspectorBody == null) return;
+            _layoutInspectorBody.RemoveAllViews();
+
+            if (_selectedNode == null)
+            {
+                var empty = new TextView(this) { Text = "No GameObject Selected", TextSize = 11 };
+                empty.SetTextColor(Color.ParseColor("#858b98"));
+                _layoutInspectorBody.AddView(empty);
+                return;
+            }
+
+            var nodeTitle = new TextView(this) { Text = $"☑ {_selectedNode.Name}   [Dynamic ▼]", TextSize = 12 };
             nodeTitle.SetTextColor(Color.White);
-            inspBody.AddView(nodeTitle);
+            _layoutInspectorBody.AddView(nodeTitle);
+
+            var tagLayer = new TextView(this) { Text = "Tag: Untagged       Layer: Default", TextSize = 10 };
+            tagLayer.SetTextColor(Color.ParseColor("#858b98"));
+            tagLayer.SetPadding(0, DpToPx(2), 0, DpToPx(6));
+            _layoutInspectorBody.AddView(tagLayer);
 
             // Transform Section
             var tfHeader = new TextView(this) { Text = "▼ Transform", TextSize = 11 };
             tfHeader.SetTextColor(Color.ParseColor("#3884ff"));
-            tfHeader.SetPadding(0, DpToPx(6), 0, DpToPx(2));
-            inspBody.AddView(tfHeader);
+            tfHeader.SetPadding(0, DpToPx(4), 0, DpToPx(2));
+            _layoutInspectorBody.AddView(tfHeader);
 
-            inspBody.AddView(CreateVector3Row("Position", "-0.79", "0.50", "-0.13"));
-            inspBody.AddView(CreateVector3Row("Rotation", "0.0", "0.0", "0.0"));
-            inspBody.AddView(CreateVector3Row("Scale", "1.0", "1.0", "1.0"));
+            var pos = _selectedNode.Transform.Position;
+            var rot = _selectedNode.Transform.Rotation;
+            var scl = _selectedNode.Transform.Scale;
+
+            _layoutInspectorBody.AddView(CreateEditableVector3Row("Position", pos, v => { _selectedNode.Transform.Position = v; }));
+            _layoutInspectorBody.AddView(CreateEditableVector3Row("Rotation", rot, v => { _selectedNode.Transform.Rotation = v; }));
+            _layoutInspectorBody.AddView(CreateEditableVector3Row("Scale", scl, v => { _selectedNode.Transform.Scale = v; }));
 
             // MeshRenderer Section
-            var mrHeader = new TextView(this) { Text = "▼ MeshRenderer", TextSize = 11 };
-            mrHeader.SetTextColor(Color.ParseColor("#3884ff"));
-            mrHeader.SetPadding(0, DpToPx(6), 0, DpToPx(2));
-            inspBody.AddView(mrHeader);
+            var mesh = _selectedNode.GetComponent<MeshRendererComponent>();
+            if (mesh != null)
+            {
+                var mrHeader = new TextView(this) { Text = "▼ MeshRenderer", TextSize = 11 };
+                mrHeader.SetTextColor(Color.ParseColor("#3884ff"));
+                mrHeader.SetPadding(0, DpToPx(6), 0, DpToPx(2));
+                _layoutInspectorBody.AddView(mrHeader);
 
-            var txtMesh = new TextView(this) { Text = "Mesh: 📦 Cube (Mesh)\nMaterials: 1 elements", TextSize = 11 };
-            txtMesh.SetTextColor(Color.ParseColor("#9da4b4"));
-            inspBody.AddView(txtMesh);
+                var txtMesh = new TextView(this) { Text = $"Mesh: {mesh.Shape} (Mesh)\nMaterials: 1 elements", TextSize = 10 };
+                txtMesh.SetTextColor(Color.ParseColor("#9da4b4"));
+                _layoutInspectorBody.AddView(txtMesh);
+            }
 
-            // Add Component Button
+            // Buttons
+            var btnFocus = new Button(this) { Text = "🎯 Focus Camera Target", TextSize = 11 };
+            btnFocus.SetTextColor(Color.White);
+            btnFocus.SetBackgroundColor(Color.ParseColor("#252b3a"));
+            btnFocus.LayoutParameters = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, DpToPx(32)) { TopMargin = DpToPx(6) };
+            btnFocus.Click += (s, e) => {
+                _camTarget = _selectedNode.Transform.Position;
+                Toast.MakeText(this, $"Camera focused on {_selectedNode.Name}", ToastLength.Short)?.Show();
+            };
+            _layoutInspectorBody.AddView(btnFocus);
+
             var btnAddComp = new Button(this) { Text = "+ Add Component", TextSize = 11 };
             btnAddComp.SetTextColor(Color.White);
-            btnAddComp.SetBackgroundColor(Color.ParseColor("#252b3a"));
-            btnAddComp.LayoutParameters = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, DpToPx(32)) { TopMargin = DpToPx(8) };
-            inspBody.AddView(btnAddComp);
+            btnAddComp.SetBackgroundColor(Color.ParseColor("#1e2330"));
+            btnAddComp.LayoutParameters = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, DpToPx(32)) { TopMargin = DpToPx(4) };
+            btnAddComp.Click += (s, e) => Toast.MakeText(this, "Component Menu Opened", ToastLength.Short)?.Show();
+            _layoutInspectorBody.AddView(btnAddComp);
+        }
 
-            rightPanel.AddView(inspBody);
-            root.AddView(rightPanel);
-
-            // 4. BOTTOM DOCK: PROJECT & CONSOLE TABS
-            int botH = DpToPx(130);
-            var botPanel = new LinearLayout(this)
+        private void TogglePlayMode()
+        {
+            if (_currentState == PlayState.EditMode)
             {
-                Orientation = Orientation.Vertical,
-                LayoutParameters = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, botH)
+                _currentState = PlayState.PlayMode;
+                _btnPlay!.Text = "⏹";
+                _btnPlay.SetTextColor(Color.ParseColor("#2ecc71"));
+
+                _initialTransforms.Clear();
+                foreach (var n in _scene.Nodes) _initialTransforms[n] = (n.Transform.Position, n.Transform.Rotation, n.Transform.Scale);
+                AddConsoleLog("▶ Engine entered Play Mode");
+            }
+            else
+            {
+                _currentState = PlayState.EditMode;
+                _btnPlay!.Text = "▶";
+                _btnPlay.SetTextColor(Color.White);
+
+                foreach (var kvp in _initialTransforms)
                 {
-                    Gravity = GravityFlags.Bottom,
-                    RightMargin = rightW
+                    kvp.Key.Transform.Position = kvp.Value.pos;
+                    kvp.Key.Transform.Rotation = kvp.Value.rot;
+                    kvp.Key.Transform.Scale = kvp.Value.scale;
                 }
-            };
-            botPanel.SetBackgroundColor(Color.ParseColor("#14161f"));
-
-            // Tabs Bar
-            var botTabs = new LinearLayout(this) { Orientation = Orientation.Horizontal };
-            botTabs.SetBackgroundColor(Color.ParseColor("#181b25"));
-
-            _tabProject = CreateTabButton("📁 Project", false);
-            _tabConsole = CreateTabButton("📟 Console", true);
-            botTabs.AddView(_tabProject);
-            botTabs.AddView(_tabConsole);
-            botPanel.AddView(botTabs);
-
-            // Console Logs Container
-            _layoutConsoleLog = new LinearLayout(this) { Orientation = Orientation.Vertical };
-            _layoutConsoleLog.SetPadding(DpToPx(10), DpToPx(4), DpToPx(10), DpToPx(4));
-
-            string[] logs = {
-                "ℹ info: VAO: [ID 0] Mesh uploaded successfully to VRAM [DefaultRenderPipeline]",
-                "ℹ info: Compiling shader pass Standard with Keywords: LIGHT_ON",
-                "ℹ info: Compiling shader pass Gizmos with [CommandBuffer] 12:13:47",
-                "⚠ warning: Texture 'Floor_Normal' compressed at 2048x2048"
-            };
-            foreach (var log in logs)
-            {
-                var txt = new TextView(this) { Text = log, TextSize = 10 };
-                txt.SetTextColor(log.StartsWith("⚠") ? Color.ParseColor("#f1c40f") : Color.ParseColor("#8e96a8"));
-                _layoutConsoleLog.AddView(txt);
+                AddConsoleLog("⏹ Engine stopped (State restored to Edit Mode)");
+                RefreshInspectorUI();
             }
-            botPanel.AddView(_layoutConsoleLog);
+        }
 
-            // Project Grid Container
-            _layoutProjectGrid = new LinearLayout(this) { Orientation = Orientation.Horizontal };
-            _layoutProjectGrid.Visibility = ViewStates.Gone;
-            _layoutProjectGrid.SetPadding(DpToPx(10), DpToPx(8), DpToPx(10), DpToPx(8));
-            string[] assets = { "📁 Textures", "📁 Scripts", "📁 Shaders", "📄 Player.cs", "🎨 Material" };
-            foreach (var a in assets)
-            {
-                var card = new TextView(this) { Text = a, TextSize = 11 };
-                card.SetTextColor(Color.White);
-                card.SetBackgroundColor(Color.ParseColor("#1c202c"));
-                card.SetPadding(DpToPx(8), DpToPx(14), DpToPx(8), DpToPx(14));
-                var lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = DpToPx(8) };
-                card.LayoutParameters = lp;
-                _layoutProjectGrid.AddView(card);
-            }
-            botPanel.AddView(_layoutProjectGrid);
+        private void AddConsoleLog(string msg)
+        {
+            RunOnUiThread(() => {
+                if (_layoutConsoleLog == null) return;
+                var txt = new TextView(this) { Text = msg, TextSize = 10 };
+                txt.SetTextColor(msg.Contains("warning") || msg.Contains("⚠") ? Color.ParseColor("#f1c40f") : Color.ParseColor("#8e96a8"));
+                _layoutConsoleLog.AddView(txt, 0);
+            });
+        }
 
-            // Tab Click handlers
-            _tabProject.Click += (s, e) => {
-                _tabProject.SetTextColor(Color.ParseColor("#3884ff"));
-                _tabConsole.SetTextColor(Color.ParseColor("#858b98"));
-                _layoutProjectGrid.Visibility = ViewStates.Visible;
-                _layoutConsoleLog.Visibility = ViewStates.Gone;
+        private LinearLayout CreateEditableVector3Row(string label, Vector3 val, Action<Vector3> onUpdate)
+        {
+            var row = new LinearLayout(this) { Orientation = Orientation.Horizontal };
+            row.SetPadding(0, DpToPx(2), 0, DpToPx(2));
+
+            var lbl = new TextView(this) { Text = label, TextSize = 10, LayoutParameters = new LinearLayout.LayoutParams(DpToPx(48), ViewGroup.LayoutParams.WrapContent) };
+            lbl.SetTextColor(Color.ParseColor("#858b98"));
+            row.AddView(lbl);
+
+            row.AddView(CreateNumChip("X", val.X.ToString("F2"), "#d63031", (v) => { val.X = v; onUpdate(val); }));
+            row.AddView(CreateNumChip("Y", val.Y.ToString("F2"), "#00b894", (v) => { val.Y = v; onUpdate(val); }));
+            row.AddView(CreateNumChip("Z", val.Z.ToString("F2"), "#0984e3", (v) => { val.Z = v; onUpdate(val); }));
+            return row;
+        }
+
+        private TextView CreateNumChip(string axis, string val, string colorHex, Action<float> onValChanged)
+        {
+            var tv = new TextView(this) { Text = $"{axis} {val}", TextSize = 10 };
+            tv.SetTextColor(Color.White);
+            tv.SetBackgroundColor(Color.ParseColor(colorHex));
+            tv.SetPadding(DpToPx(4), DpToPx(2), DpToPx(4), DpToPx(2));
+            var lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = DpToPx(4) };
+            tv.LayoutParameters = lp;
+
+            tv.Click += (s, e) => {
+                var input = new EditText(this) { Text = val };
+                input.SetRawInputType(Android.Text.InputTypes.NumberFlagDecimal | Android.Text.InputTypes.ClassNumber | Android.Text.InputTypes.NumberFlagSigned);
+
+                new AlertDialog.Builder(this)
+                    .SetTitle($"Edit {axis} Coordinate")
+                    .SetView(input)
+                    .SetPositiveButton("Apply", (dlg, ev) => {
+                        if (float.TryParse(input.Text, out float parsed))
+                        {
+                            onValChanged(parsed);
+                            RefreshInspectorUI();
+                        }
+                    })
+                    .SetNegativeButton("Cancel", (dlg, ev) => { })
+                    .Show();
             };
-            _tabConsole.Click += (s, e) => {
-                _tabConsole.SetTextColor(Color.ParseColor("#3884ff"));
-                _tabProject.SetTextColor(Color.ParseColor("#858b98"));
-                _layoutConsoleLog.Visibility = ViewStates.Visible;
-                _layoutProjectGrid.Visibility = ViewStates.Gone;
-            };
+            return tv;
+        }
 
-            root.AddView(botPanel);
-
-            // Attach Direct to Android Content
-            AddContentView(root, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
+        private TextView CreateToolIcon(string icon, string tooltip)
+        {
+            var tv = new TextView(this) { Text = icon, TextSize = 14 };
+            tv.SetTextColor(Color.White);
+            tv.SetPadding(DpToPx(8), DpToPx(6), DpToPx(8), DpToPx(6));
+            tv.Click += (s, e) => Toast.MakeText(this, tooltip, ToastLength.Short)?.Show();
+            return tv;
         }
 
         private TextView CreateTabButton(string text, bool isActive)
@@ -720,7 +1093,7 @@ namespace Prowl.AndroidRunner
             var tv = new TextView(this) { Text = title, TextSize = 11 };
             tv.SetTextColor(Color.ParseColor("#9da4b4"));
             tv.SetBackgroundColor(Color.ParseColor("#1b1e28"));
-            tv.SetPadding(DpToPx(10), DpToPx(4), DpToPx(10), DpToPx(4));
+            tv.SetPadding(DpToPx(8), DpToPx(4), DpToPx(8), DpToPx(4));
             return tv;
         }
 
@@ -729,81 +1102,13 @@ namespace Prowl.AndroidRunner
             var tv = new TextView(this) { Text = title, TextSize = 11 };
             tv.SetTextColor(Color.White);
             tv.SetBackgroundColor(isSelected ? Color.ParseColor("#2b5bb8") : Color.Transparent);
-            tv.SetPadding(DpToPx(10), DpToPx(3), DpToPx(10), DpToPx(3));
-            return tv;
-        }
-
-        private LinearLayout CreateVector3Row(string label, string x, string y, string z)
-        {
-            var row = new LinearLayout(this) { Orientation = Orientation.Horizontal };
-            row.SetPadding(0, DpToPx(2), 0, DpToPx(2));
-
-            var lbl = new TextView(this) { Text = label, TextSize = 10, LayoutParameters = new LinearLayout.LayoutParams(DpToPx(50), ViewGroup.LayoutParams.WrapContent) };
-            lbl.SetTextColor(Color.ParseColor("#858b98"));
-            row.AddView(lbl);
-
-            row.AddView(CreateNumChip("X", x, "#d63031"));
-            row.AddView(CreateNumChip("Y", y, "#00b894"));
-            row.AddView(CreateNumChip("Z", z, "#0984e3"));
-            return row;
-        }
-
-        private TextView CreateNumChip(string axis, string val, string colorHex)
-        {
-            var tv = new TextView(this) { Text = $"{axis} {val}", TextSize = 10 };
-            tv.SetTextColor(Color.White);
-            tv.SetBackgroundColor(Color.ParseColor(colorHex));
-            tv.SetPadding(DpToPx(4), DpToPx(2), DpToPx(4), DpToPx(2));
-            var lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = DpToPx(4) };
-            tv.LayoutParameters = lp;
+            tv.SetPadding(DpToPx(8), DpToPx(4), DpToPx(8), DpToPx(4));
             return tv;
         }
 
         private int DpToPx(int dp)
         {
             return (int)TypedValue.ApplyDimension(ComplexUnitType.Dip, dp, Resources!.DisplayMetrics);
-        }
-
-        // ==========================================================
-        // TOUCH CAMERA ORBIT FOR VIEWPORT
-        // ==========================================================
-        public override bool OnTouchEvent(MotionEvent? e)
-        {
-            if (e == null || _view == null) return base.OnTouchEvent(e);
-
-            float x = e.GetX();
-            float y = e.GetY();
-            int rightBoundary = _view.Size.X - DpToPx(260);
-            int botBoundary = _view.Size.Y - DpToPx(130);
-
-            // Orbit lang kapag nasa Viewport area nag-touch
-            if (x < rightBoundary && (y > DpToPx(70) && y < botBoundary))
-            {
-                switch (e.ActionMasked)
-                {
-                    case MotionEventActions.Down:
-                        _isOrbiting = true;
-                        _touchLastX = x;
-                        _touchLastY = y;
-                        break;
-                    case MotionEventActions.Move:
-                        if (_isOrbiting)
-                        {
-                            float dx = x - _touchLastX;
-                            float dy = y - _touchLastY;
-                            _camYaw += dx * 0.35f;
-                            _camPitch = Math.Clamp(_camPitch - dy * 0.35f, 5.0f, 85.0f);
-                            _touchLastX = x;
-                            _touchLastY = y;
-                        }
-                        break;
-                    case MotionEventActions.Up:
-                    case MotionEventActions.Cancel:
-                        _isOrbiting = false;
-                        break;
-                }
-            }
-            return base.OnTouchEvent(e);
         }
 
         protected override void OnDestroy()
@@ -817,9 +1122,101 @@ namespace Prowl.AndroidRunner
     }
 
     // =========================================================================
-    // PROWL ENGINE SCENE & COMPONENTS
+    // VIRTUAL JOYSTICK CUSTOM VIEW (ON-SCREEN DUAL THUMBSTICK)
     // =========================================================================
+    public class VirtualJoystickView : View
+    {
+        private readonly Action<Vector2> _onJoyMoved;
+        private readonly Paint _basePaint;
+        private readonly Paint _stickPaint;
 
+        private float _centerX, _centerY;
+        private float _baseRadius;
+        private float _stickRadius;
+        private float _stickX, _stickY;
+        private bool _isPressed = false;
+
+        public VirtualJoystickView(Android.Content.Context ctx, Action<Vector2> onJoyMoved) : base(ctx)
+        {
+            _onJoyMoved = onJoyMoved;
+
+            _basePaint = new Paint(PaintFlags.AntiAlias)
+            {
+                Color = Color.Argb(70, 25, 30, 45),
+                StrokeWidth = 3
+            };
+            _basePaint.SetStyle(Paint.Style.FillAndStroke);
+
+            _stickPaint = new Paint(PaintFlags.AntiAlias)
+            {
+                Color = Color.Argb(160, 56, 132, 255)
+            };
+            _stickPaint.SetStyle(Paint.Style.Fill);
+        }
+
+        protected override void OnSizeChanged(int w, int h, int oldw, int oldh)
+        {
+            base.OnSizeChanged(w, h, oldw, oldh);
+            _centerX = w * 0.5f;
+            _centerY = h * 0.5f;
+            _baseRadius = MathF.Min(w, h) * 0.45f;
+            _stickRadius = _baseRadius * 0.38f;
+            _stickX = _centerX;
+            _stickY = _centerY;
+        }
+
+        protected override void OnDraw(Canvas? canvas)
+        {
+            if (canvas == null) return;
+            // Draw Outer Ring
+            canvas.DrawCircle(_centerX, _centerY, _baseRadius, _basePaint);
+            // Draw Inner Thumbstick
+            canvas.DrawCircle(_stickX, _stickY, _stickRadius, _stickPaint);
+        }
+
+        public override bool OnTouchEvent(MotionEvent? e)
+        {
+            if (e == null) return false;
+
+            switch (e.ActionMasked)
+            {
+                case MotionEventActions.Down:
+                case MotionEventActions.Move:
+                    _isPressed = true;
+                    float dx = e.GetX() - _centerX;
+                    float dy = e.GetY() - _centerY;
+                    float dist = MathF.Sqrt(dx * dx + dy * dy);
+
+                    if (dist > _baseRadius)
+                    {
+                        dx = (dx / dist) * _baseRadius;
+                        dy = (dy / dist) * _baseRadius;
+                    }
+
+                    _stickX = _centerX + dx;
+                    _stickY = _centerY + dy;
+
+                    // Output Normalized Vector (-1 to 1)
+                    _onJoyMoved(new Vector2(dx / _baseRadius, -dy / _baseRadius));
+                    Invalidate();
+                    return true;
+
+                case MotionEventActions.Up:
+                case MotionEventActions.Cancel:
+                    _isPressed = false;
+                    _stickX = _centerX;
+                    _stickY = _centerY;
+                    _onJoyMoved(Vector2.Zero);
+                    Invalidate();
+                    return true;
+            }
+            return base.OnTouchEvent(e);
+        }
+    }
+
+    // =========================================================================
+    // PROWL ENGINE SCENE & COMPONENT SYSTEM
+    // =========================================================================
     public class Scene
     {
         public List<ProwlNode> Nodes { get; } = new List<ProwlNode>();
@@ -862,14 +1259,6 @@ namespace Prowl.AndroidRunner
         {
             foreach (var c in Components) if (c is T m) return m;
             return null;
-        }
-
-        public void AttachScript(MonoBehaviour script)
-        {
-            script.Node = this;
-            Scripts.Add(script);
-            script.Awake();
-            script.Start();
         }
 
         public void Start()
