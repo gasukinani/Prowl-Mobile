@@ -1,12 +1,13 @@
-using System;
+                
+                using System;
 using System.IO;
+using System.Numerics;
 using Android.App;
 using Android.Content.PM;
 using Android.OS;
 using Android.Util;
-using Prowl.Editor;
-using Prowl.Editor.GUI.Panels;
 using Prowl.Runtime;
+using Prowl.Runtime.Rendering;
 using Silk.NET.Maths;
 using Silk.NET.Windowing;
 using Silk.NET.Windowing.Sdl.Android;
@@ -15,7 +16,7 @@ using SilkWindow = Silk.NET.Windowing.Window;
 namespace Prowl.AndroidRunner
 {
     [Activity(
-        Label = "Prowl Editor Mobile",
+        Label = "Prowl Mobile",
         MainLauncher = true,
         ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize | ConfigChanges.KeyboardHidden,
         ScreenOrientation = ScreenOrientation.SensorLandscape,
@@ -23,7 +24,7 @@ namespace Prowl.AndroidRunner
     )]
     public class MainActivity : SilkActivity
     {
-        private const string LogTag = "ProwlEditorAndroid";
+        private const string LogTag = "ProwlMobile";
         private IView? _view;
 
         protected override void OnCreate(Bundle? savedInstanceState)
@@ -32,12 +33,12 @@ namespace Prowl.AndroidRunner
 
             try
             {
-                // 1. I-extract ang default assets at shaders sa internal directory
+                // I-extract ang game assets sa internal app storage
                 AssetExtractor.EnsureAssetsExtracted(this);
             }
             catch (Exception ex)
             {
-                Log.Error(LogTag, $"Asset extraction warning: {ex.Message}");
+                Log.Error(LogTag, $"Asset extraction error: {ex.Message}");
             }
         }
 
@@ -60,55 +61,59 @@ namespace Prowl.AndroidRunner
 
         private void OnLoad()
         {
-            Log.Info(LogTag, "Initializing Prowl Editor & Runtime Subsystems...");
+            Log.Info(LogTag, "Initializing Prowl Runtime Engine...");
 
             try
             {
-                // 1. Setup Project Path sa Android Internal Storage
-                string rootStorage = FilesDir?.AbsolutePath ?? ApplicationContext.FilesDir?.AbsolutePath ?? "/sdcard/Android/data/com.gasukinani.prowlmobile/files";
-                string projectPath = Path.Combine(rootStorage, "DefaultProject");
+                // 1. Storage setup
+                string storagePath = FilesDir?.AbsolutePath ?? "";
+                string assetsPath = Path.Combine(storagePath, "Assets");
+                if (!Directory.Exists(assetsPath))
+                    Directory.CreateDirectory(assetsPath);
 
-                if (!Directory.Exists(projectPath))
-                    Directory.CreateDirectory(projectPath);
-
-                // 2. Initialize Runtime & Editor Application
+                // 2. Initialize Core Prowl Runtime
                 Application.Initialize();
-                EditorApplication.Initialize();
 
-                // 3. Buksan o gumawa ng Project
-                if (Project.HasProject)
-                {
-                    Project.Open(new DirectoryInfo(projectPath));
-                }
+                // 3. I-setup ang 3D Scene Environment & Nodes
+                Setup3DEnvironment();
 
-                // 4. I-setup ang Editor Panels Layout
-                SetupEditorLayout();
-
-                Log.Info(LogTag, "Prowl Editor GUI ready!");
+                Log.Info(LogTag, "Prowl 3D Scene loaded and running!");
             }
             catch (Exception ex)
             {
-                Log.Error(LogTag, $"Failed to start Editor: {ex}");
+                Log.Error(LogTag, $"Engine Initialization Error: {ex}");
             }
         }
 
-        private void SetupEditorLayout()
+        private void Setup3DEnvironment()
         {
-            try
-            {
-                // Buksan ang mga pangunahing Editor Panels
-                EditorGui.ClearPanels();
-                
-                EditorGui.AddPanel(new SceneViewPanel());      // 3D Viewport kung saan makikita ang mundo
-                EditorGui.AddPanel(new HierarchyPanel());      // Tree view ng Nodes / GameObjects
-                EditorGui.AddPanel(new InspectorPanel());      // Property editor ng selected Object/Component
-                EditorGui.AddPanel(new ProjectPanel());        // Asset Manager / File Browser
-                EditorGui.AddPanel(new ConsolePanel());        // Debug Logs & Error Output
-            }
-            catch (Exception ex)
-            {
-                Log.Warn(LogTag, $"Layout setup notice: {ex.Message}");
-            }
+            // Gumawa ng aktibong 3D Scene
+            Scene scene = new Scene();
+            SceneManager.SetActiveScene(scene);
+
+            // NODE 1: Main Camera Node
+            var cameraNode = GameObject.Create("Main Camera");
+            cameraNode.Transform.Position = new Vector3(0, 2f, -5f);
+            cameraNode.Transform.LookAt(Vector3.Zero);
+            var cam = cameraNode.AddComponent<Camera>();
+            cam.ClearColor = new Color(0.1f, 0.15f, 0.25f, 1.0f);
+
+            // NODE 2: Sun / Directional Light Node
+            var lightNode = GameObject.Create("SunLight");
+            lightNode.Transform.Rotation = Quaternion.CreateFromYawPitchRoll(0.6f, 0.8f, 0);
+            var light = lightNode.AddComponent<DirectionalLight>();
+            light.Color = Color.white;
+            light.Intensity = 1.0f;
+
+            // NODE 3: 3D Object Node na may Script
+            var cubeNode = GameObject.Create("Interactive 3D Object");
+            cubeNode.Transform.Position = Vector3.Zero;
+            var renderer = cubeNode.AddComponent<MeshRenderer>();
+            renderer.Mesh = Mesh.CreateCube();
+            renderer.Material = Material.CreateDefault();
+
+            // Mag-attach ng script para sa animation at touch interaction
+            cubeNode.AddComponent<RotatorComponent>();
         }
 
         private void OnResize(Vector2D<int> size)
@@ -121,11 +126,11 @@ namespace Prowl.AndroidRunner
             try
             {
                 Time.Update((float)delta);
-                EditorApplication.Update();
+                SceneManager.ActiveScene?.Update();
             }
             catch (Exception ex)
             {
-                Log.Error(LogTag, $"Editor Update error: {ex.Message}");
+                Log.Error(LogTag, $"Update error: {ex.Message}");
             }
         }
 
@@ -134,24 +139,34 @@ namespace Prowl.AndroidRunner
             try
             {
                 Graphics.StartFrame();
-                
-                // I-render ang 3D Scene Viewport + Editor ImGui / Paper UI Panels
-                EditorApplication.Render();
-                
+                SceneManager.ActiveScene?.Render();
                 Graphics.EndFrame();
             }
             catch (Exception ex)
             {
-                Log.Error(LogTag, $"Editor Render error: {ex.Message}");
+                Log.Error(LogTag, $"Render error: {ex.Message}");
             }
         }
 
         protected override void OnDestroy()
         {
             base.OnDestroy();
-            EditorApplication.Quit();
             Application.Quit();
             _view?.Dispose();
+        }
+    }
+
+    // ==========================================
+    // CUSTOM MONOBEHAVIOUR SCRIPT
+    // ==========================================
+    public class RotatorComponent : MonoBehaviour
+    {
+        public float RotationSpeed = 50f;
+
+        public override void Update()
+        {
+            // Awtomatikong pag-ikot sa 3D Space
+            Transform.Rotate(new Vector3(15f * Time.DeltaTime, RotationSpeed * Time.DeltaTime, 0));
         }
     }
 }
