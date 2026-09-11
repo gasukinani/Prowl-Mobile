@@ -1,19 +1,17 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0-android</TargetFramework>
+    <!-- Itinugma sa .NET 10 ng Prowl.Runtime -->
+    <TargetFramework>net10.0-android</TargetFramework>
     <SupportedOSPlatformVersion>26.0</SupportedOSPlatformVersion>
     <OutputType>Exe</OutputType>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    
-    <!-- Pigilan ang EOL warning/error -->
-    <CheckEolWorkloads>false</CheckEolWorkloads>
 
     <!-- Pigilan ang pagbura ng reflection types -->
     <PublishTrimmed>false</PublishTrimmed>
     <RunAOTCompilation>false</RunAOTCompilation>
 
-    <!-- 64-bit Android lamang (Standard sa .NET 8) -->
+    <!-- 64-bit Android Architectures -->
     <RuntimeIdentifiers>android-arm64;android-x64</RuntimeIdentifiers>
     <ApplicationId>com.gasukinani.prowlmobile</ApplicationId>
     <ApplicationVersion>1</ApplicationVersion>
@@ -21,12 +19,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Reference sa umiiral na Prowl.Runtime -->
+    <!-- Reference sa Prowl.Runtime -->
     <ProjectReference Include="..\Prowl.Runtime\Prowl.Runtime.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Tamang Silk.NET Packages na umiiral sa NuGet -->
+    <!-- Silk.NET Packages -->
     <PackageReference Include="Silk.NET.Windowing" Version="2.20.0" />
     <PackageReference Include="Silk.NET.Windowing.Sdl" Version="2.20.0" />
     <PackageReference Include="Silk.NET.OpenGLES" Version="2.20.0" />
