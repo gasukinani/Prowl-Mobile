@@ -45,17 +45,16 @@ namespace Prowl.AndroidRunner
         private bool _isPlaying = false;
         private readonly Dictionary<ProwlNode, (Vector3 pos, Vector3 rot, Vector3 scale)> _initialTransforms = new();
 
-        // Camera State
-        private float _camYaw = 40.0f;
-        private float _camPitch = 24.0f;
-        private float _camDistance = 11.5f;
-        private Vector3 _camTarget = new(0, 0.8f, 0);
-        private readonly float _fov = 60.0f;
+        // Natural Editor Camera Settings (Matches Screenshot 2)
+        private float _camYaw = 45.0f;
+        private float _camPitch = 32.0f;
+        private float _camDistance = 6.2f; // Tamang-tamang layo tulad ng nasa screenshot
+        private Vector3 _camTarget = new(-0.5f, 0.4f, 0.0f);
+        private readonly float _fov = 55.0f;
 
-        // Navigation
+        // Joystick Input
         private Vector2 _moveVector = Vector2.Zero;
         private Vector2 _lookVector = Vector2.Zero;
-        private float _flyElevation = 0f;
 
         private float _fpsTimer;
         private int _frameCount;
@@ -71,14 +70,18 @@ namespace Prowl.AndroidRunner
 
         private void InitDefaultScene()
         {
+            // 1. Directional Light
             var sun = _scene.CreateNode("Directional Light");
             sun.AddComponent<LightComponent>().Type = LightType.Directional;
-            sun.Transform.Position = new Vector3(0, 4f, 0);
+            sun.Transform.Position = new Vector3(0, 3.2f, 0);
 
+            // 2. Center Cube with Player Script
             var cube = _scene.CreateNode("Cube");
-            cube.Transform.Position = new Vector3(-0.79f, 0.5f, -0.13f);
+            cube.Transform.Position = new Vector3(-0.7919196f, 0.49999952f, -0.13459778f);
             cube.AddComponent<MeshRendererComponent>().Shape = MeshShape.Cube;
+            cube.AddComponent<ScriptComponent>(); // Attached C# Script
 
+            // 3. Environment Trees
             var tree1 = _scene.CreateNode("Tree_1");
             tree1.Transform.Position = new Vector3(2.5f, 0, 1.8f);
             tree1.AddComponent<MeshRendererComponent>().Shape = MeshShape.Tree;
@@ -102,7 +105,38 @@ namespace Prowl.AndroidRunner
             _toolbar.OnMenuActionSelected += HandleMenuAction;
             root.AddView(_toolbar);
 
-            // 2. Right Sidebar (Hierarchy & Inspector)
+            // 2. Viewport Tabs (❖ Scene, 🎮 Game, ⚙ Preferences)
+            var vpTabs = new LinearLayout(this)
+            {
+                Orientation = Orientation.Horizontal,
+                LayoutParameters = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, EditorTheme.DpToPx(this, 28))
+                {
+                    TopMargin = EditorTheme.DpToPx(this, 40),
+                    LeftMargin = EditorTheme.DpToPx(this, 8)
+                }
+            };
+            vpTabs.AddView(CreateTabButton("❖ Scene ✕", true));
+            vpTabs.AddView(CreateTabButton("🎮 Game", false));
+            vpTabs.AddView(CreateTabButton("⚙ Preferences", false));
+            root.AddView(vpTabs);
+
+            // 3. Viewport Tools (Top-Left)
+            var toolOverlay = new LinearLayout(this)
+            {
+                Orientation = Orientation.Vertical,
+                LayoutParameters = new FrameLayout.LayoutParams(EditorTheme.DpToPx(this, 30), ViewGroup.LayoutParams.WrapContent)
+                {
+                    TopMargin = EditorTheme.DpToPx(this, 75),
+                    LeftMargin = EditorTheme.DpToPx(this, 10)
+                }
+            };
+            toolOverlay.SetBackgroundColor(Color.ParseColor("#a0181b25"));
+            toolOverlay.AddView(CreateToolIcon("✥", "Translate Tool"));
+            toolOverlay.AddView(CreateToolIcon("↻", "Rotate Tool"));
+            toolOverlay.AddView(CreateToolIcon("⤢", "Scale Tool"));
+            root.AddView(toolOverlay);
+
+            // 4. Right Sidebar (Hierarchy & Inspector)
             _rightSidebar = new LinearLayout(this)
             {
                 Orientation = Orientation.Vertical,
@@ -127,28 +161,28 @@ namespace Prowl.AndroidRunner
 
             root.AddView(_rightSidebar);
 
-            // 3. Bottom Dock
+            // 5. Bottom Dock (Interactive Project Browser + Console)
             _consoleDock = new ProjectConsoleDock(this, rightWidth);
             root.AddView(_consoleDock);
 
-            // 4. Viewport Joysticks Overlay
+            // 6. Viewport Joysticks
             var joystickOverlay = new FrameLayout(this) { LayoutParameters = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent) };
 
             var leftJoy = new VirtualJoystickView(this, v => _moveVector = v);
-            leftJoy.LayoutParameters = new FrameLayout.LayoutParams(EditorTheme.DpToPx(this, 120), EditorTheme.DpToPx(this, 120))
+            leftJoy.LayoutParameters = new FrameLayout.LayoutParams(EditorTheme.DpToPx(this, 110), EditorTheme.DpToPx(this, 110))
             {
                 Gravity = GravityFlags.Bottom | GravityFlags.Left,
-                LeftMargin = EditorTheme.DpToPx(this, 12),
-                BottomMargin = EditorTheme.DpToPx(this, 145)
+                LeftMargin = EditorTheme.DpToPx(this, 10),
+                BottomMargin = EditorTheme.DpToPx(this, 155)
             };
             joystickOverlay.AddView(leftJoy);
 
             var rightJoy = new VirtualJoystickView(this, v => _lookVector = v);
-            rightJoy.LayoutParameters = new FrameLayout.LayoutParams(EditorTheme.DpToPx(this, 120), EditorTheme.DpToPx(this, 120))
+            rightJoy.LayoutParameters = new FrameLayout.LayoutParams(EditorTheme.DpToPx(this, 110), EditorTheme.DpToPx(this, 110))
             {
                 Gravity = GravityFlags.Bottom | GravityFlags.Right,
-                RightMargin = rightWidth + EditorTheme.DpToPx(this, 12),
-                BottomMargin = EditorTheme.DpToPx(this, 145)
+                RightMargin = rightWidth + EditorTheme.DpToPx(this, 10),
+                BottomMargin = EditorTheme.DpToPx(this, 155)
             };
             joystickOverlay.AddView(rightJoy);
 
@@ -156,6 +190,24 @@ namespace Prowl.AndroidRunner
 
             AddContentView(root, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
             RefreshUI();
+        }
+
+        private TextView CreateTabButton(string text, bool isActive)
+        {
+            var tv = new TextView(this) { Text = text, TextSize = 10 };
+            tv.SetTextColor(isActive ? EditorTheme.AccentBlue : EditorTheme.TextMuted);
+            tv.SetBackgroundColor(isActive ? EditorTheme.BgHeader : Color.Transparent);
+            tv.SetPadding(EditorTheme.DpToPx(this, 8), EditorTheme.DpToPx(this, 4), EditorTheme.DpToPx(this, 8), EditorTheme.DpToPx(this, 4));
+            return tv;
+        }
+
+        private TextView CreateToolIcon(string icon, string tooltip)
+        {
+            var tv = new TextView(this) { Text = icon, TextSize = 12, Gravity = GravityFlags.Center };
+            tv.SetTextColor(Color.White);
+            tv.SetPadding(EditorTheme.DpToPx(this, 4), EditorTheme.DpToPx(this, 6), EditorTheme.DpToPx(this, 4), EditorTheme.DpToPx(this, 6));
+            tv.Click += (s, e) => Toast.MakeText(this, tooltip, ToastLength.Short)?.Show();
+            return tv;
         }
 
         private void RefreshUI()
@@ -173,7 +225,7 @@ namespace Prowl.AndroidRunner
             {
                 _initialTransforms.Clear();
                 foreach (var n in _scene.Nodes) _initialTransforms[n] = (n.Transform.Position, n.Transform.Rotation, n.Transform.Scale);
-                _consoleDock?.AddLog("▶ Engine entered Play Mode");
+                _consoleDock?.AddLog("▶ Engine entered Play Mode (Scripts Active)");
             }
             else
             {
@@ -217,6 +269,13 @@ namespace Prowl.AndroidRunner
                 if (_rightSidebar != null)
                     _rightSidebar.Visibility = _rightSidebar.Visibility == ViewStates.Visible ? ViewStates.Gone : ViewStates.Visible;
             }
+            else if (action.Contains("Reset Editor Camera"))
+            {
+                _camYaw = 45.0f;
+                _camPitch = 32.0f;
+                _camDistance = 6.2f;
+                _camTarget = new Vector3(-0.5f, 0.4f, 0.0f);
+            }
             else if (action.Contains("Clear Console"))
             {
                 _consoleDock?.Clear();
@@ -248,8 +307,8 @@ namespace Prowl.AndroidRunner
                 _fpsTimer = 0f;
             }
 
-            // Navigation
-            float lookSpeed = 65.0f, moveSpeed = 6.5f;
+            // Smooth Orbit Navigation
+            float lookSpeed = 65.0f, moveSpeed = 5.0f;
             if (_lookVector != Vector2.Zero)
             {
                 _camYaw += _lookVector.X * lookSpeed * dt;
@@ -262,14 +321,6 @@ namespace Prowl.AndroidRunner
                 Vector3 forward = new(MathF.Sin(radY), 0, MathF.Cos(radY));
                 Vector3 right = new(MathF.Cos(radY), 0, -MathF.Sin(radY));
                 _camTarget += ((forward * _moveVector.Y) + (right * _moveVector.X)) * moveSpeed * dt;
-            }
-
-            _camTarget.Y += _flyElevation * moveSpeed * dt;
-
-            if (_isPlaying && _selectedNode != null)
-            {
-                var cur = _selectedNode.Transform.Rotation;
-                _selectedNode.Transform.Rotation = new Vector3(cur.X, cur.Y + dt * 50.0f, cur.Z);
             }
 
             _scene.Update(dt, _moveVector, _isPlaying);
