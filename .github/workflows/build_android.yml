@@ -48,5 +48,6 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: Prowl-Android-APK
-        path: Prowl.AndroidRunner/bin/Release/net10.0-android/**/*.apk
+        # Tanging ang final output APK lang sa publish folder ang ia-upload
+        path: Prowl.AndroidRunner/bin/Release/net10.0-android/publish/*.apk
         if-no-files-found: error
