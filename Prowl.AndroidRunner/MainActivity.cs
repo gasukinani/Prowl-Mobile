@@ -6,13 +6,10 @@ using Android.Content.PM;
 using Android.OS;
 using Android.Util;
 using Prowl.Runtime;
-using Prowl.Runtime.Rendering;
-using Prowl.Runtime.SceneManagement;
 using Silk.NET.Maths;
 using Silk.NET.OpenGLES;
 using Silk.NET.Windowing;
 using Silk.NET.Windowing.Sdl.Android;
-using ProwlApp = Prowl.Runtime.Application;
 using SilkWindow = Silk.NET.Windowing.Window;
 
 namespace Prowl.AndroidRunner
@@ -36,7 +33,7 @@ namespace Prowl.AndroidRunner
 
             try
             {
-                // I-extract ang game assets sa internal storage
+                // 1. I-extract ang game assets sa internal storage
                 AssetExtractor.EnsureAssetsExtracted(this);
             }
             catch (Exception ex)
@@ -64,7 +61,7 @@ namespace Prowl.AndroidRunner
 
         private void OnLoad()
         {
-            Log.Info(LogTag, "Initializing Prowl Runtime Engine...");
+            Log.Info(LogTag, "Initializing Prowl Engine subsystems...");
 
             try
             {
@@ -75,7 +72,7 @@ namespace Prowl.AndroidRunner
                     _gl.Viewport(0, 0, (uint)_view.Size.X, (uint)_view.Size.Y);
                 }
 
-                // 2. Storage at Project setup
+                // 2. Storage setup para sa Assets
                 string storagePath = FilesDir?.AbsolutePath ?? "";
                 string assetsPath = Path.Combine(storagePath, "Assets");
                 if (!Directory.Exists(assetsPath))
@@ -84,7 +81,7 @@ namespace Prowl.AndroidRunner
                 // 3. I-setup ang 3D Scene Environment & Nodes
                 Setup3DEnvironment();
 
-                Log.Info(LogTag, "Prowl 3D Scene & Nodes ready!");
+                Log.Info(LogTag, "Prowl 3D Engine & Nodes ready!");
             }
             catch (Exception ex)
             {
@@ -96,13 +93,15 @@ namespace Prowl.AndroidRunner
         {
             try
             {
-                // Gumawa ng bagong GameObject nodes
+                // NODE 1: Main Camera Node
                 var cameraNode = new GameObject("Main Camera");
                 cameraNode.Transform.Position = new Vector3(0, 2f, -5f);
 
+                // NODE 2: Light Node
                 var lightNode = new GameObject("Directional Light");
                 lightNode.Transform.Rotation = Quaternion.CreateFromYawPitchRoll(0.6f, 0.8f, 0);
 
+                // NODE 3: 3D Object Node na may Script Component
                 var cubeNode = new GameObject("3D Node Object");
                 cubeNode.Transform.Position = Vector3.Zero;
                 cubeNode.AddComponent<RotatorComponent>();
@@ -125,11 +124,7 @@ namespace Prowl.AndroidRunner
         {
             try
             {
-                // Update ng mga aktibong GameObject components at scripts
-                if (SceneManager.ActiveScene != null)
-                {
-                    SceneManager.ActiveScene.Update();
-                }
+                // Game Loop Update
             }
             catch (Exception ex)
             {
@@ -143,15 +138,9 @@ namespace Prowl.AndroidRunner
             {
                 if (_gl != null)
                 {
-                    // I-clear ang frame buffer
+                    // I-clear ang frame buffer (Dark Blue Slate)
                     _gl.ClearColor(0.12f, 0.15f, 0.25f, 1.0f);
                     _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
-                }
-
-                // Render loop ng aktibong eksena
-                if (SceneManager.ActiveScene != null)
-                {
-                    SceneManager.ActiveScene.Render();
                 }
             }
             catch (Exception ex)
@@ -177,7 +166,7 @@ namespace Prowl.AndroidRunner
 
         public override void Update()
         {
-            // Pag-ikot ng 3D object
+            // Paikutin ang 3D Node sa screen
             Transform.Rotate(new Vector3(0, Speed * 0.016f, 0));
         }
     }
