@@ -1,17 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.gasukinani.prowlmobile"
-    android:versionCode="1"
-    android:versionName="1.0">
+    package="com.gasukinani.prowlmobile">
 
-  <!-- I-require ang OpenGL ES 3.0 (0x00030000) -->
+  <!-- I-require ang OpenGL ES 3.0 -->
   <uses-feature android:glEsVersion="0x00030000" android:required="true" />
   <uses-permission android:name="android.permission.INTERNET" />
   <uses-permission android:name="android.permission.WAKE_LOCK" />
 
   <application 
       android:allowBackup="true" 
-      android:icon="@mipmap/ic_launcher" 
       android:label="Prowl Mobile" 
       android:supportsRtl="true">
   </application>
