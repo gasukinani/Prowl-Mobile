@@ -1,9 +1,13 @@
+using System;
+using System.IO;
 using Android.App;
 using Android.Content.PM;
 using Android.OS;
 using Android.Util;
+using Prowl.Editor;
+using Prowl.Editor.GUI.Panels;
+using Prowl.Runtime;
 using Silk.NET.Maths;
-using Silk.NET.OpenGLES;
 using Silk.NET.Windowing;
 using Silk.NET.Windowing.Sdl.Android;
 using SilkWindow = Silk.NET.Windowing.Window;
@@ -11,7 +15,7 @@ using SilkWindow = Silk.NET.Windowing.Window;
 namespace Prowl.AndroidRunner
 {
     [Activity(
-        Label = "Prowl Mobile",
+        Label = "Prowl Editor Mobile",
         MainLauncher = true,
         ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize | ConfigChanges.KeyboardHidden,
         ScreenOrientation = ScreenOrientation.SensorLandscape,
@@ -19,9 +23,8 @@ namespace Prowl.AndroidRunner
     )]
     public class MainActivity : SilkActivity
     {
-        private const string LogTag = "ProwlAndroidRunner";
+        private const string LogTag = "ProwlEditorAndroid";
         private IView? _view;
-        private GL? _gl;
 
         protected override void OnCreate(Bundle? savedInstanceState)
         {
@@ -29,85 +32,125 @@ namespace Prowl.AndroidRunner
 
             try
             {
-                // 1. I-extract ang game assets sa internal storage
+                // 1. I-extract ang default assets at shaders sa internal directory
                 AssetExtractor.EnsureAssetsExtracted(this);
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
-                Log.Error(LogTag, $"Asset extraction error: {ex.Message}");
+                Log.Error(LogTag, $"Asset extraction warning: {ex.Message}");
             }
         }
 
         protected override void OnRun()
         {
-            try
-            {
-                var options = ViewOptions.Default;
-                options.API = new GraphicsAPI(ContextAPI.OpenGLES, ContextProfile.Core, ContextFlags.Default, new APIVersion(3, 0));
-                options.FramesPerSecond = 60;
-                options.UpdatesPerSecond = 60;
+            var options = ViewOptions.Default;
+            options.API = new GraphicsAPI(ContextAPI.OpenGLES, ContextProfile.Core, ContextFlags.Default, new APIVersion(3, 0));
+            options.FramesPerSecond = 60;
+            options.UpdatesPerSecond = 60;
 
-                _view = SilkWindow.GetView(options);
+            _view = SilkWindow.GetView(options);
 
-                _view.Load += OnLoad;
-                _view.Resize += OnResize;
-                _view.Render += OnRender;
-                _view.Update += OnUpdate;
+            _view.Load += OnLoad;
+            _view.Resize += OnResize;
+            _view.Update += OnUpdate;
+            _view.Render += OnRender;
 
-                _view.Run();
-            }
-            catch (System.Exception ex)
-            {
-                Log.Error(LogTag, $"Fatal error during OnRun: {ex}");
-                throw;
-            }
+            _view.Run();
         }
 
         private void OnLoad()
         {
-            Log.Info(LogTag, "Initializing OpenGL ES context...");
+            Log.Info(LogTag, "Initializing Prowl Editor & Runtime Subsystems...");
 
-            // Kumuha ng OpenGL ES API instance mula sa Silk View
-            _gl = _view?.CreateOpenGLES();
-
-            if (_gl != null && _view != null)
+            try
             {
-                _gl.Viewport(0, 0, (uint)_view.Size.X, (uint)_view.Size.Y);
-                Log.Info(LogTag, $"Viewport configured: {_view.Size.X}x{_view.Size.Y}");
-            }
+                // 1. Setup Project Path sa Android Internal Storage
+                string rootStorage = FilesDir?.AbsolutePath ?? ApplicationContext.FilesDir?.AbsolutePath ?? "/sdcard/Android/data/com.gasukinani.prowlmobile/files";
+                string projectPath = Path.Combine(rootStorage, "DefaultProject");
 
-            // DITO I-INITIALIZE ANG PROWL ENGINE (hal. Prowl.Runtime components)
+                if (!Directory.Exists(projectPath))
+                    Directory.CreateDirectory(projectPath);
+
+                // 2. Initialize Runtime & Editor Application
+                Application.Initialize();
+                EditorApplication.Initialize();
+
+                // 3. Buksan o gumawa ng Project
+                if (Project.HasProject)
+                {
+                    Project.Open(new DirectoryInfo(projectPath));
+                }
+
+                // 4. I-setup ang Editor Panels Layout
+                SetupEditorLayout();
+
+                Log.Info(LogTag, "Prowl Editor GUI ready!");
+            }
+            catch (Exception ex)
+            {
+                Log.Error(LogTag, $"Failed to start Editor: {ex}");
+            }
+        }
+
+        private void SetupEditorLayout()
+        {
+            try
+            {
+                // Buksan ang mga pangunahing Editor Panels
+                EditorGui.ClearPanels();
+                
+                EditorGui.AddPanel(new SceneViewPanel());      // 3D Viewport kung saan makikita ang mundo
+                EditorGui.AddPanel(new HierarchyPanel());      // Tree view ng Nodes / GameObjects
+                EditorGui.AddPanel(new InspectorPanel());      // Property editor ng selected Object/Component
+                EditorGui.AddPanel(new ProjectPanel());        // Asset Manager / File Browser
+                EditorGui.AddPanel(new ConsolePanel());        // Debug Logs & Error Output
+            }
+            catch (Exception ex)
+            {
+                Log.Warn(LogTag, $"Layout setup notice: {ex.Message}");
+            }
         }
 
         private void OnResize(Vector2D<int> size)
         {
-            if (_gl != null)
-            {
-                _gl.Viewport(0, 0, (uint)size.X, (uint)size.Y);
-            }
+            Screen.InternalUpdate((int)size.X, (int)size.Y);
         }
 
         private void OnUpdate(double delta)
         {
-            // Game logic update (Prowl Engine Update)
+            try
+            {
+                Time.Update((float)delta);
+                EditorApplication.Update();
+            }
+            catch (Exception ex)
+            {
+                Log.Error(LogTag, $"Editor Update error: {ex.Message}");
+            }
         }
 
         private void OnRender(double delta)
         {
-            if (_gl == null) return;
-
-            // 1. Mag-clear ng screen gamit ang kulay (RGB: Cornflower Blue) para mapatunayang buhay ang graphics pipeline
-            _gl.ClearColor(0.2f, 0.4f, 0.8f, 1.0f);
-            _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
-
-            // 2. DITO TATAWAGIN ANG PROWL ENGINE RENDER PIPELINE:
-            // Halimbawa: Prowl.Runtime.Graphics.Render();
+            try
+            {
+                Graphics.StartFrame();
+                
+                // I-render ang 3D Scene Viewport + Editor ImGui / Paper UI Panels
+                EditorApplication.Render();
+                
+                Graphics.EndFrame();
+            }
+            catch (Exception ex)
+            {
+                Log.Error(LogTag, $"Editor Render error: {ex.Message}");
+            }
         }
 
         protected override void OnDestroy()
         {
             base.OnDestroy();
-            _gl?.Dispose();
+            EditorApplication.Quit();
+            Application.Quit();
             _view?.Dispose();
         }
     }
