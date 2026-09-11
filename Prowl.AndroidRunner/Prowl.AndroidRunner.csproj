@@ -6,28 +6,27 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
 
-    <!-- Huwag gawing fatal error ang package warnings -->
     <NoWarn>$(NoWarn);NU1605</NoWarn>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
 
-    <!-- Pigilan ang pagbura ng reflection types para sa Game Engine -->
+    <!-- Huwag i-trim ang mga editor reflection classes -->
     <PublishTrimmed>false</PublishTrimmed>
     <RunAOTCompilation>false</RunAOTCompilation>
     <AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
 
-    <!-- 64-bit Android Architectures -->
+    <!-- 64-bit Architectures -->
     <RuntimeIdentifiers>android-arm64;android-x64</RuntimeIdentifiers>
     <ApplicationId>com.gasukinani.prowlmobile</ApplicationId>
     <ApplicationVersion>1</ApplicationVersion>
     <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
   </PropertyGroup>
 
-  <!-- Reference sa Prowl.Runtime Engine -->
   <ItemGroup>
+    <!-- Engine Runtime at Full Editor References -->
     <ProjectReference Include="..\Prowl.Runtime\Prowl.Runtime.csproj" />
+    <ProjectReference Include="..\Prowl.Editor\Prowl.Editor.csproj" />
   </ItemGroup>
 
-  <!-- Silk.NET Packages -->
   <ItemGroup>
     <PackageReference Include="Silk.NET.Windowing" Version="2.23.0" />
     <PackageReference Include="Silk.NET.Windowing.Sdl" Version="2.23.0" />
@@ -36,7 +35,6 @@
     <PackageReference Include="Silk.NET.OpenAL.Soft.Native" Version="1.23.1" />
   </ItemGroup>
 
-  <!-- Native .so Binaries Inclusion -->
   <ItemGroup>
     <AndroidNativeLibrary Condition="Exists('lib\arm64-v8a')" Include="lib\arm64-v8a\*.so">
       <Abi>arm64-v8a</Abi>
